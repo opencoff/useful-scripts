@@ -1,0 +1,45 @@
+
+;
+; INF File to disable CAPSLOCK key.
+; $Id: disablecaps.inf,v 1.3 2005/07/28 22:44:06 sherle Exp $
+; Sudhi Herle
+;
+
+[version]
+signature="$Windows NT$"
+
+[DisableCapsLock]
+CopyFiles = DisableCapsLock.Files.Inf
+AddReg    = DisableCapsLock.Add.Reg
+
+[DefaultInstall]
+CopyFiles = DisableCapsLock.Files.Inf
+AddReg    = DisableCapsLock.Add.Reg
+Reboot
+
+[DefaultUnInstall]
+DelFiles  = DisableCapsLock.Files.Inf
+DelReg    = DisableCapsLock.Del.Reg
+
+
+[DestinationDirs]
+DisableCapsLock.Files.Inf = 17
+
+[DisableCapsLock.Files.Inf]
+DisableCaps.inf
+
+[DisableCapsLock.Add.Reg]
+HKLM,%UIF%,DisplayName,,"%DisableCapsLock%"
+HKLM,%UIF%,UninstallString,,"rundll32.exe advpack.dll,LaunchINFSection %17%\DisableCaps.inf"
+HKLM,%KBD%,"Scancode Map",0x00000001,00,00,00,00,00,00,00,00,02,00,00,00,00,00,0x3a,00,00,00,00,00
+
+
+[DisableCapsLock.Del.Reg]
+HKLM,%KBD%,Scancode Map
+HKLM,%UIF%
+
+[Strings]
+DisableCapsLock="Disable CAPS LOCK key"
+UIF="Software\Microsoft\Windows\CurrentVersion\Uninstall\DisableCapsLock"
+KBD="SYSTEM\CurrentControlSet\Control\Keyboard Layout"
+

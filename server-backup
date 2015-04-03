@@ -1,0 +1,323 @@
+#! /bin/bash
+
+#
+# Wrapper to do all the things needed to backup stuff to/on the home
+# server.
+#
+# Sudhi Herle <sudhi@herle.net>
+# License: GPLv2
+# March 07, 2011
+#
+# Usage: $0 daily|weekly|monthly
+
+# On my server, I need to backup the following:
+#
+#   /home       -> /backup/home/{daily,weekly,monthly}
+#   herle.net   -> /backup/herle.net/{home,dpkg,etc}/{daily,weekly,monthly}
+#   firewall    -> /backup/firewall{dpkg,etc}/{daily,weekly,monthly}
+#   server      -> /backup/fangorn{dpkg,etc}/{daily,weekly,monthly}
+#
+# Once invoked, this script will backup everything above in
+# sequence.
+#
+# Errors and other messages are logged to syslog with the prefix
+# '$1-backup' [e.g., daily-backup, 'weekly-backup' etc.]
+
+
+# ---- Configuration Vars ---
+SSH_key=$HOME/.ssh/backup_rsa
+Backup_root=/backup
+rsync=rsync
+Skip_compress=/tmp/skip_compress.$RANDOM
+
+debug=1
+#debug=0
+
+trap "/bin/rm -f $Skip_compress" EXIT
+
+
+# uncomment the next line to test out stuff
+#Backup_root=/tmp/backup
+#e=echo
+#rsync=$HOME/scripts/rsync.py
+
+
+# -- don't modify anything below --
+
+if [ $debug -gt 0 ]; then
+    debug() {
+        echo "$@"
+        return 0
+    }
+else
+    debug() {
+        return 0
+    }
+fi
+
+#
+# writelog message...
+#
+# Write a log to syslog
+#
+logpref="$Typ-backup"
+writelog() {
+    $e logger -p "daemon.info" -t $logpref "$@"
+    debug "$@"
+}
+
+# Backup Policy: Number of backups of each type to keep
+# XXX Put this in a separate file?
+Typ=$1
+case "x$Typ" in
+    xdaily)   NBACKUPS=10 ;;
+    xweekly)  NBACKUPS=8  ;;
+    xmonthly) NBACKUPS=6  ;;
+
+    x) echo "Usage: $0 daily|weekly|monthly" 1>&2
+       exit 1;;
+
+    *) echo "$0: Unknown backup type $Typ" 1>&2
+       exit 1;;
+esac
+
+
+id=`id -n -u`
+if [ $id != "root" ]; then
+    writelog "Not running as root. Aborting!"
+    exit 1
+fi
+
+
+
+# XXX Is this a fatal error?
+if [ ! -f $SSH_key ]; then
+    writelog "$0: Can't find SSH Key $SSH_key."
+    exit 1
+fi
+
+
+
+# Global var to hold dirs that ought to be removed
+RM_dirs=""
+
+
+# Create the skip-compress file
+cat > $Skip_compress <<EOF
+.zip
+.bz2
+.z
+.gz
+.iso
+.mp3
+.m4a
+.mp4
+.flv
+.wma
+.wmv
+.img
+.jpg
+.jpeg
+.JPG
+.PNG
+.png
+.pdf
+EOF
+
+
+# Rotate a bunch of dirs such that only most recent 'n' dirs remain
+# rotate_dir DIR NBACKUPS
+rotate_dir() {
+    local dir=$1
+    local count=$2
+
+    #if [ ! -d $dir ]; then
+        #$e mkdir -p $dir
+        #return 0
+    #fi
+
+    debug "Rotating $dir [max $count] .."
+    local n=$count
+    while [ $n -gt 0 ]; do
+        local prev=$(( $n - 1 ))
+        local d=$dir.$n
+        local pd=$dir.$prev
+
+        if [ -d $d ]; then
+            local nn=$d.$RANDOM
+            RM_dirs="$RM_dirs $nn"
+
+            debug "  # rm -rf $d [mv $d $nn]"
+            $e mv $d $nn
+            #$e rm -rf $d
+        fi
+        if [ -d $pd ]; then
+            debug "  # mv $pd $d"
+            $e mv $pd $d
+        fi
+        n=$prev
+    done
+
+    $e rm -rf $RM_dirs
+    return 0
+}
+
+
+# find a suitable link destination for rsync's --link-dest option
+# find_link_dest DIR NBACKUPS
+find_link_dest() {
+    local bdir=$1; shift
+    local dir=$(basename $bdir)
+    local b0=$(dirname $bdir)
+    local broot=$(dirname $b0)
+    local n=$1
+    local order=""
+
+    #echo "bdir=$bdir, dir=$dir, broot=$broot" 1>&2
+    # When trying to find best directory to link from, we always use the
+    # latest known backup in the order of "daily, weekly, monthly".
+    order="daily weekly monthly"
+
+    for o in $order; do
+
+        local base=$broot/$o
+
+        # We are backing up to .0; so, we search backwards to find a
+        # latest directory older than .0
+        local i=1
+        while [ $i -le $n ]; do
+            local d=$base.$i/$dir
+            if [ -d $d ]; then
+                echo $d
+                return 0
+            fi
+            i=$(( $i + 1 ))
+        done
+    done
+    return 0
+}
+
+
+# Backup a local/remote dpkg file
+# backup_dpkg HOSTNAME BACKUP_DIR
+backup_dpkg() {
+    local host=$1
+    local broot=$2  # root of backup dir
+    local cmd=
+
+    if [ -z "$host" ]; then
+        writelog "Backing up system dpkg selections to $broot .."
+        #dpkg --get-selections | gzip -9 > $tmp
+        cmd="dpkg --get-selections"
+    else
+        host=`echo $host| cut -d: -f1`
+        local remote=`ssh -i $SSH_key root@$host uname`
+
+        case $remote in
+            Linux)
+                writelog "Backing up dpkg selections from $host to $broot .."
+                #ssh -i $SSH_key root@$host 'dpkg --get-selections' | gzip -9 > $tmp
+                cmd="ssh -i $SSH_key root@$host dpkg --get-selections"
+                ;;
+
+            OpenBSD)
+                writelog "Backing up pkg selections from $host to $broot.0 .."
+                #ssh -i $SSH_key root@$host 'pkg_info -m' | gzip -9 > $tmp
+                cmd="ssh -i $SSH_key root@$host pkg_info -m"
+                ;;
+
+            *)
+                debug "Don't know how to backup package DB for $host ($remote)"
+                writelog "Don't know how to backup package DB for $host ($remote)"
+                ;;
+        esac
+
+    fi
+
+    test -d $broot || mkdir -p $broot
+
+    local tmp=$broot/pkgs.$RANDOM
+    $cmd | gzip -v > $tmp
+    $e mv $tmp $broot/pkg_selections.gz
+    rm -f $tmp
+    return 0
+}
+
+
+
+# backup_server HOSTNAME BACKUP_BASE_DIR DIRS_TO_BACKUP...
+#  creates directories of the form:
+#     $base/$Typ.0/$dir ..
+backup_server() {
+    local pkgstoo=$1; shift
+    local host=$1;    shift  # host to backup; can be empty string
+    local broot=$1;   shift  # backup dir without .NN prefix
+
+    local rsync_host=
+    local rsync_ssh=
+    if [ -n "$host" ]; then
+        rsync_host="$host"
+        rsync_ssh="--rsh=ssh -i $SSH_key -l root"
+    fi
+
+    rotate_dir $broot/$Typ $NBACKUPS
+
+    # This directory is now available to us for doing work.
+    local base=$broot/$Typ.0
+    mkdir -p $base
+
+    local x=
+    for x in $*; do
+        local bdir=$base/$x
+        local link=$(find_link_dest $bdir $NBACKUPS)
+        local src=
+
+        # Trailing '/' is REQUIRED to ensure that contents of $x are
+        # backed up to $bdir
+        if [ $x = "/" ]; then
+            src=$rsync_host/
+            bdir=$base
+        else
+            src=$rsync_host/$x/
+        fi
+
+        if [ -n "$link" ]; then
+            link="--link-dest=$link"
+        fi
+
+        writelog "Backing up $src to $bdir (via '$link')"
+        debug "# $rsync -azH $link $rsync_ssh $src $bdir"
+
+        test -d $bdir || mkdir -p $bdir
+
+        # The shell expands $rsync_ssh var so that it appears as two
+        # separate args to rsync [--rsh=ssh, -i SSH_key]. So, have to do
+        # this ugly hack!
+        if [ -z "$rsync_ssh" ]; then
+            $e $rsync -azH --skip-compress=$Skip_compress \
+                $link $src $bdir
+        else
+            $e $rsync -azH "$rsync_ssh" \
+                --skip-compress=$Skip_compress \
+                $link $src $bdir
+        fi
+    done
+
+    case $pkgstoo in
+        yes|YES|Y*)
+                    backup_dpkg "$host" $base/dpkg
+                    ;;
+        *) ;;
+    esac
+
+    return 0
+}
+
+
+backup_server yes firewall::rootfs         $Backup_root/firewall/partial  etc var root
+backup_server yes family.herle.net::rootfs $Backup_root/herle.net/partial etc var root home
+
+# Now, backup localhost
+backup_server yes "" $Backup_root/fangorn/partial etc usr/local/etc var root home
+
+# vim: expandtab:sw=4:ts=4:tw=72:

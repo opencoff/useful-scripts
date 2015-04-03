@@ -1,0 +1,31 @@
+#! /usr/bin/env ksh
+
+# Generate a semi-random MAC address
+#
+# (c) 2014, 2015 Sudhi Herle <sudhi-at-herle-net>
+# License: Public Domain
+
+# Generate a random mac address
+_randmac() {
+
+    # These are VMware, Xen and Parallels OUIs
+    set -A vendors "00:05:69" "00:0c:29" "00:1c:14" "00:50:56" \
+                   "00:1c:42" "00:16:3e"
+    typeset n=${#vendors[@]}
+
+    set -A rand -- $(dd if=/dev/urandom bs=4 count=1 2>/dev/null| od -t xC)
+
+    # rand[0] and rand[5] are offsets; we can ignore them.
+    typeset a1=${rand[1]}
+    typeset a2=${rand[2]}
+    typeset a3=${rand[3]}
+    typeset a4=$(( 0 + 0x${rand[4]} ))   # We want this to be an integer
+
+    # pick a random prefix from the list
+    typeset pref=${vendors[$a4 % $n]}
+
+    echo "$pref:$a1:$a2:$a3"
+}
+
+
+_randmac

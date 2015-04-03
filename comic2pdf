@@ -1,0 +1,179 @@
+#!/usr/bin/env python
+
+# Convert cbr/cbz or a directory of images to a letter sized PDF
+#
+# (c) 2014 Sudhi Herle <sw-at-herle.net>
+# GPLv2
+#
+# XXX Python doesn't have rarfile in its standard lib; macports
+#     doesn't have a ready package. So, we do subprocess
+#
+
+
+import sys, os, os.path
+import tempfile
+import zipfile, subprocess
+
+from os.path import join, splitext, abspath, basename, dirname
+
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import Image
+from reportlab.pdfgen import canvas
+
+
+Z = os.path.basename(sys.argv[0])
+
+def warn(fmt, *args):
+    sfmt = '%s: %s' % (Z, fmt)
+    if len(args) > 0:
+        s = sfmt % args
+    else:
+        s = sfmt
+
+    if not s.endswith('\n'):
+        s += '\n'
+
+    sys.stdout.flush()
+    sys.stderr.write(s)
+    sys.stderr.flush()
+
+def die(fmt, *args):
+    warn(fmt, *args)
+    exit(1)
+
+
+def rmtree(dir):
+    """pythonic rm -rf"""
+
+    for root, dirs, files in os.walk(dir, 0):
+        for f in files:
+            here  = join(root, f)
+            os.unlink(here)
+
+        for d in dirs:
+            here  = join(root, d)
+            os.rmdir(here)
+
+    os.rmdir(dir)
+
+def run(cmd, *args):
+    """Run 'cmd' with optional args. Die if error"""
+
+    v = [cmd] + list(args)
+    #print os.getcwd()
+    #print ' '.join(v)
+    p = subprocess.Popen(v, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    err = p.stderr.readlines()
+    ex  = p.wait()
+    if ex < 0:
+        warn("Process '%s' caught signal %d and died!",
+               cmd, -ex)
+        if len(err) > 0:
+            die(''.join(err))
+        else:
+            exit(1)
+
+    elif ex > 0:
+        warn("Process '%s' exited abnormally (code %d); error follows..", cmd, ex)
+        if len(err) > 0:
+            die(''.join(err))
+        else:
+            exit(1)
+
+
+def unrar(nm, dest):
+    """Unrar file into destination 'dest'"""
+    pwd = os.getcwd()
+    #os.makedirs(dest, 0750)
+    os.chdir(dest)
+    run('unrar', 'x', nm)
+    os.chdir(pwd)
+
+def unzip(nm, dest):
+    """Unzip file into destination 'dest'"""
+    cf = zipfile.ZipFile(nm)
+    cf.extractall(dest)
+    cf.close()
+
+
+_ext = ('jpg', 'jpeg', 'png', 'gif')
+ext  = dict([ ('.%s' % x, True) for x in _ext ])
+def images(dn):
+    """Gather all images in dn"""
+    global ext
+
+    extn = ext
+
+    img = []
+    for root, dirs, files in os.walk(dn):
+        for f in files:
+            fn = join(root, f)
+            bn, ex = splitext(f)
+
+            if ex.lower() in extn:
+                img.append(fn)
+
+    #print "Images:\n\t%s" % ', '.join(img)
+    return img
+
+
+def img2pdf(pdf, imgs):
+    """Convert a list of images into a PDF """
+    try:
+        # put each image into its own page and resize dynamically.
+        c = canvas.Canvas(pdf, pagesize=letter)
+        for img in imgs:
+            i = Image(img)
+            c.setPageSize((i.drawWidth, i.drawHeight))
+            c.drawImage(img, 0, 0, i.drawWidth, i.drawHeight)
+            c.showPage()
+
+        c.save()
+
+    except Exception, ex:
+        warn("Exception while converting %s: %s", fn, ex)
+
+def process(fn):
+    """Convert a cbr/cbz into a pdf"""
+
+    dn = abspath(tempfile.mkdtemp(dir='.'))
+
+    if fn.endswith('.cbz'):
+        unzip(fn, dn)
+    elif fn.endswith('.cbr'):
+        unrar(fn, dn)
+    else:
+        die("Don't know how to grok %s", fn)
+
+    imgs   = images(dn)
+    bn, ex = splitext(fn)
+    pdf    = bn + '.pdf'
+
+    print "%s --> %s" % (basename(fn), basename(pdf))
+    img2pdf(pdf, imgs)
+
+    rmtree(dn)
+
+
+
+# XXX Add command line parsing - e.g., destination directory for PDF
+
+
+def main():
+
+    for f in sys.argv[1:]:
+        fn = abspath(f)
+        if os.path.isfile(fn):
+            process(fn)
+        elif os.path.isdir(fn):
+            imgs = images(fn)
+            dn   = basename(fn)
+            pdf  = dn + '.pdf'
+
+            print "%s --> %s" % (dn, basename(pdf))
+            img2pdf(pdf, imgs)
+
+
+main()
+
+# EOF

@@ -1,0 +1,346 @@
+#! /usr/bin/env python
+
+#
+# Simple script to build the kernel from a single source for
+# multiple architectures with objects in a separate directory
+#
+# Author: Sudhi Herle <sudhi@herle.net>
+# Date: Feb 3, 2006
+#
+import os, sys, os.path, shutil, random, tarfile
+import gzip
+from os.path import basename, dirname, join, realpath, normpath, abspath
+from optparse import Option, OptionParser
+
+Z = basename(sys.argv[0])
+
+help = """Usage: %(prog)s [options] ARCH [make-flags]
+
+Where ARCH is a legal, linux supported architecture.
+
+ARCH can have an optional SUFFIX (separated by a '-') after the
+keyword to denote sub-builds for that arch. e.g., x86-ide.
+In this case, you will invoke this script as:
+
+    %(prog)s x86-ide menuconfig
+    %(prog)s x86-ide bzImage modules
+
+'make-flags' can be any other flags that you typically pass
+to 'make' or the kernel build system. e.g.,
+    %(prog)s x86  bzImage    modules -s -j4 "MAKE=make -j4"
+    %(prog)s uml  all modules -s -j4 "MAKE=make -j4"
+
+All intermediate files for the chosen architecture will go
+    ./obj-$ARCH[-$SUFFIX]
+
+The final kernel binary will also be found in that directory.
+
+If the user request a tar ball be created of the compiled kernel &
+modules, it will be placed in one of two places:
+    $HOME/kernel-images/$ARCH
+    Current dir (.)
+
+""" % {'prog': Z}
+
+
+
+def error(doex, fmt, *args):
+    sfmt = "%s: %s" % (Z, fmt)
+    if args:
+        str = sfmt % args
+    else:
+        str = sfmt
+    print >>sys.stderr, str
+    if doex > 0:
+        sys.exit(doex)
+
+def abbrev(wordlist):
+    """Generate an abbreviation table from a list of words.
+       (Gratuitously borrowed from perl4/perl5)
+
+       Synopsis::
+
+           table = abbrev(wordlist)
+
+       Stores all unambiguous truncations of each element of
+       `wordlist` as keys in a table. The values in the table are
+       the original list elements.
+
+       Example::
+
+           words = [ "help", "hello", "sync", "show" ]
+           table = abbrev(words)
+
+           print `table`
+
+       This will print::
+
+           {'sy': 'sync', 'help': 'help', 'show': 'show',
+            'sync': 'sync', 'syn': 'sync', 'sh': 'show',
+            'hell': 'hello', 'hello': 'hello', 'sho': 'show'}
+
+       (The order of the keys may differ depending on your
+       platform)
+    """
+
+    have  = {}
+    table = {}
+    for word in wordlist:
+        table[word] = word[:]
+        l = len(word)-1
+        #print "word=%s" % word
+        while l > 0:
+            ab = word[0:l]
+            #print "\t%2d--%s" % (l, ab)
+            if ab in have:
+                have[ab] = have[ab] + 1
+            else:
+                have[ab] = 0
+
+            if have[ab] == 0:     # first time we're seeing this abbrev
+                table[ab] = word
+            elif have[ab] == 1:
+                # This is the second time. So, 'ab' is ambiguous.
+                # And thus, can't be used in the final dict.
+                del table[ab]
+            else:
+                break
+
+            l = l - 1
+        # end of while len > 0
+
+    return table   
+
+def grok_kver(objdir):
+    """Grok kernel version from objdir"""
+    hdrdir = [ join(objdir, 'include', 'linux'), 
+               join(objdir, 'include', 'generated'), 
+             ]
+    rel = None
+    for e in ['version.h', 'utsrelease.h']:
+        for d in hdrdir:
+            f = join(d, e)
+            try:
+                fd = file(f, 'r')
+            except:
+                continue
+
+            for line in fd:
+                if line.find('UTS_RELEASE') > 0:
+                    v   = line.strip().split()
+                    rel = v[2].replace('"', '')
+                    fd.close()
+                    return rel
+
+            fd.close()
+
+    error(1, "Can't find kernel version#!")
+
+
+def run_program(args, use_fakeroot=False):
+    """Run program and ensure it exits correctly"""
+    if use_fakeroot:
+        cmd = ['fakeroot'] + args
+    else:
+        cmd = args
+
+    print ' '.join(cmd)
+    sys.stdout.flush()
+    r = os.spawnvp(os.P_WAIT, cmd[0], cmd)
+    if r != 0:
+        error(r, "%s failed to run", cmd[0])
+
+
+def unlink_if(*args):
+    for f in args:
+        if os.path.isfile(f):
+            os.unlink(f)
+        elif os.path.isdir(f):
+            shutil.rmtree(f, ignore_errors=True)
+
+def add_tarobj(tf, src):
+    """Add file 'src' into tar file 'tf' - but make sure all is
+    owned by root."""
+
+    ti       = tf.gettarinfo(src)
+    ti.uid   = 0
+    ti.gid   = 0
+    ti.mode  = 0644
+    if os.path.isdir(src):
+        ti.mode |= 0111
+    ti.uname = 'root'
+    ti.gname = 'root'
+    tf.addfile(ti)
+
+
+def copyfile(src, dest):
+    """Copy a possibly compressed file from src to dest."""
+
+    if src.endswith('.gz'):
+        s = gzip.open(src, 'rb')
+    else:
+        s = open(src, 'rb')
+
+    d = open(dest, 'wb')
+    shutil.copyfileobj(s, d)
+
+    s.close()
+    d.close()
+
+parser = OptionParser(help)
+parser.disable_interspersed_args();
+parser.add_option("-B", "--objdir-base", dest="objdir", action="store",
+                  type="string", default=".", metavar='D',
+                  help="Use directory 'D' as the base of the object directory [%default]")
+parser.add_option("-c", "--config", dest="config", action="store",
+                  type="string", default=None, metavar='F',
+                  help="Use config file 'F' as initial config file [%default]")
+
+
+parser.add_option("-t", "--tar", dest="tarfile", action="store_true",
+                  default=False,
+                  help="Create a tar file if build is successful [%default]")
+
+parser.add_option("-n", "--no-build", dest="nobuild", action="store_true",
+                  default=False,
+                  help="Don't run the build step [%default]")
+
+opt, args = parser.parse_args()
+argc = len(args)
+
+if argc < 2:
+    error(0, "Insufficient arguments. Try '%s --help'", Z)
+    sys.exit(1)
+
+
+if not os.path.isfile('./init/main.c'):
+    error(1, "Not in kernel source dir. Aborting!")
+
+if opt.config is not None and not os.path.isfile(opt.config):
+    error(1, "Config file '%s' does not exist?", opt.config)
+
+# Short form for well known archs
+# Beginning 2.6.24 x86_32 and x86_64 are merged into a single arch
+# called "x86". So, to support legacy kernel versions as well as new
+# ones, we create this mapping.
+Arch_aliases = {
+                 'x86':  'x86',
+                 'i386': 'x86',
+                 'uml':  'um',
+               }
+
+# List of kernel files for each arch.
+# The key is the canonical arch name.
+Arch_kimage = {
+                'i386': 'arch/x86/boot/bzImage',
+                'x86':  'arch/x86/boot/bzImage',
+                'uml':  'linux',
+                'mips': 'vmlinux.64',
+              }
+
+arch = args[0]
+i = arch.find('-')
+if i > 0:
+    arch_suffix = arch[i:]
+    arch        = arch[:i]
+else:
+    arch_suffix = ""
+
+# Find a canonical name for arch
+canonarch = Arch_aliases.get(arch, arch)
+
+# Make an abbreviation table for all archs present
+arch_ab = abbrev(os.listdir('./arch'))
+
+if canonarch not in arch_ab:
+    error(1, "Unknown architecture '%s'", arch)
+
+
+pwd    = realpath('.')
+objdir = join(pwd, opt.objdir, 'obj-%s%s' % (arch, arch_suffix))
+objdir = realpath(normpath(objdir))
+
+if not os.path.isdir(objdir):
+    os.mkdir(objdir, 0755)
+
+# If config file is specified, use it.
+defconfig = join(objdir, '.config')
+if not os.path.isfile(defconfig) and opt.config is not None:
+    print "Using config file '%s'" % opt.config
+    copyfile(opt.config, defconfig)
+
+make_args = [ 'make',
+              'ARCH=%s' % arch,
+              'O=%s' % objdir,
+            ]
+
+if not opt.nobuild:
+    run_program(make_args + args[1:])
+
+if not opt.tarfile:
+    sys.exit(0)
+
+# Make tarball
+kver  = grok_kver(objdir)
+
+# Substitution dict for the files list below and other places
+subst = {'kver': kver, 'arch': arch, 'suffix': arch_suffix}
+
+
+# List of kernel output files that are needed when we build the
+# tarball.
+files = { Arch_kimage[arch]: 'vmlinuz-%(kver)s',
+          '.config': 'config-%(kver)s',
+          'System.map': 'System.map-%(kver)s',
+          #'Module.symvers': None,
+        }
+
+
+tarname   = 'kern_%(arch)s%(suffix)s-%(kver)s.tar' % subst
+tardir    = os.environ.get('HOME', '.')
+tarname   = abspath(join(tardir, 'kernel-images', arch, tarname))
+bztarname = tarname + '.bz2'
+
+print "Making tarball %s .." % bztarname
+
+unlink_if(tarname, bztarname)
+
+# First, create a temp dir
+tmpdir = abspath('./tmp/kinst%d' % random.randint(1000,10000000))
+kinst  = join(tmpdir, 'boot')
+os.makedirs(kinst, 0755)
+for s, d in files.items():
+    src = join(objdir, s)
+    dst = join(kinst, d % subst)
+    shutil.copy2(src, dst)
+
+# Now, install the kernel modules
+modinst = make_args + \
+            ['-s', 'modules_install', "V=1", 'INSTALL_MOD_PATH=%s' % tmpdir]
+run_program(modinst, True)
+
+# Depmod the final modules
+depmod = ['depmod', '-e', '-b', tmpdir,
+          '-F', join(objdir, 'System.map'),
+          kver
+         ]
+run_program(depmod, True)
+
+# Now, build the tarfile manually
+dn = dirname(tarname)
+if not os.path.isdir(dn):
+    #print "mkdir -p %s" % dn
+    os.makedirs(dn, 0755)
+
+tar   = ['tar', 'cf', tarname, '.' ]
+bzip2 = ['bzip2', '-9', tarname ]
+pwd   = os.getcwd()
+
+os.chdir(tmpdir)
+run_program(tar, True)
+run_program(bzip2, True)
+os.chdir(pwd)
+
+shutil.rmtree(tmpdir, ignore_errors=True)
+
+# vim: sw=4:ts=4:expandtab:tw=68:notextmode:

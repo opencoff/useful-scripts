@@ -1,0 +1,43 @@
+#! /bin/bash
+
+runcmd() {
+    echo "$@" 1>&2
+    return 0
+}
+
+
+#e=runcmd
+
+rotate_dir() {
+    local dir=$1
+    local count=$2
+
+    if [ ! -d $dir ]; then
+        $e mkdir -p $dir
+        return 0
+    fi
+
+    local n=$count
+    echo -n "Rotate $dir .. "
+    while [ $n -gt 0 ]; do
+        local prev=$(( $n - 1 ))
+        local d=$dir.$n
+        local pd=$dir.$prev
+
+        if [ -d $d ]; then
+            $e rm -rf $d
+        fi
+        if [ -d $pd ]; then
+            $e mv $pd $d
+            echo -n "$n "
+        fi
+        n=$prev
+    done
+
+    $e mv $dir $dir.0
+    echo  "0 "
+    $e mkdir -p $dir
+    return 0
+}
+
+# vim: expandtab:sw=4:ts=4:tw=72:

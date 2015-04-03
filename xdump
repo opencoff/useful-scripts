@@ -1,0 +1,3 @@
+#! /bin/sh
+
+exec hexdump -v -f $HOME/.hexdump_fmt "$@"

@@ -1,0 +1,137 @@
+#! /usr/bin/env python
+
+#
+# Script to find duplicate files
+# Sudhi Herle <sudhi@herle.net>
+# GPLv2
+#
+
+import os, sys, os.path
+import re, zlib
+from os.path  import basename, dirname, join
+from optparse import Option, OptionParser, OptionValueError
+
+try:
+    import hashlib
+    md5sum = hashlib.md5
+except:
+    import md5
+    md5sum = md5.md5
+
+
+usage = """%s dir [dir...]
+
+%s - Find duplicate files in one or more directories
+""" % (sys.argv[0], sys.argv[0])
+
+parser = OptionParser(usage)
+parser.add_option("-s", "--shell", dest="shell_cmds", action="store_true",
+                  default=False,
+                  help="Generate shell commands to delete duplicate files [%default]")
+
+opt, args = parser.parse_args()
+
+if len(args) < 1:
+    args.append('.')
+
+Ignore_re = ('\.svn',
+             '.*~$',
+             '\.*sw.$', 
+             '\.CVS',
+             '\.hg',
+             )
+Ignore_re_list = map(lambda x: re.compile(x), Ignore_re)
+
+def ignore(name):
+    """Return True if this pat must be ignored, false otherwise"""
+    global Ignore_re_list
+
+    for x in Ignore_re_list:
+        if x.search(name) is not None:
+            return True
+
+    return False
+
+class cksum_db:
+    def __init__(self, cksum):
+        self.db  = {}
+        self.cksum = cksum
+
+    def addfile(self, filename):
+        v = self.cksum(filename)
+        a = self.db.setdefault(v, [])
+        a.append(filename)
+        #print a
+
+    def dups(self):
+        """Return a dict of duplicate files. Each entry in the dict
+        is an array of files - whose contents are identical according to
+        the checksum criteria of the class."""
+
+        ck = dict([(k,v) for k, v in self.db.items() if len(v) > 1])
+        return ck
+
+def cksum_slow(filename):
+    m = md5sum()
+    fd = open(filename, "rb")
+    while True:
+        chunk = fd.read(65536)
+        if not chunk:
+            break
+        m.update(chunk)
+    fd.close()
+
+    return m.hexdigest()
+
+def cksum_quick(filename):
+    v  = 0L
+    fd = open(filename, "rb")
+    while True:
+        chunk = fd.read(65536)
+        if not chunk:
+            break
+        v = zlib.adler32(chunk, v)
+    fd.close()
+    return "%#x" % v
+
+
+def descend(db, dn):
+    """Descend into directory 'dn' and gather files into dups"""
+
+    for root, dirs, files in os.walk(dn, 1):
+        for f in files:
+            here = join(root, f)
+            if not ignore(here):
+                db.addfile(here)
+
+
+# We detect dups in two stages.
+# In the first stage, we use a quick checksum to coarsely distinguish
+# files. If two files have a checksum collision, we are not sure if they
+# are identical or just a checksum collision.
+# So, for those files, we use a strong checksum to disambiguate.
+db = cksum_db(cksum_quick)
+for d in args:
+    descend(db, d)
+
+
+# Now, we use a slow checksum for the files that maybe dups
+db2 = cksum_db(cksum_slow)
+dups = db.dups()
+for k, v  in dups.items():
+    for f in v:
+        #print "# maybe dup %s => %s" % (k, f)
+        db2.addfile(f)
+
+dups = db2.dups()
+if opt.shell_cmds:
+    for k, v in dups.items():
+        keep = v[-1]    # Keep the last one
+        s = [ "rm -f '%s'" % x for x in v[:-1] ]
+        print "# %s:\n# %s\n" % (k, '\n# '.join(v))
+        print "# %s: Keep '%s'\n%s\n" % (k, keep, '\n'.join(s))
+else:
+    for k, v  in dups.items():
+        print "%s:\n\t%s" % (k, '\n\t'.join(v))
+
+# vim: expandtab:sw=4:ts=4:tw=72:notextmode:

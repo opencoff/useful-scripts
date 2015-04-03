@@ -1,0 +1,175 @@
+#! /usr/bin/env python
+
+import random
+import os, sys
+import string, itertools
+from optparse import Option, OptionParser, OptionValueError
+
+
+#
+# Simple utility to generate random passwords of arbitrary length
+#
+# Author: Sudhi Herle <sudhi at herle.net>
+# License: GPLv2
+#
+
+
+
+def randnum(n=4):
+    """Return a 'n' decimal digit random number"""
+
+    l = 10L ** (n - 1)
+    #print "n=%d, %ld <= x < %ld" % (n, l, l *10)
+    v = random.randint(l, (l * 10) - 1)
+    return "%ld" % v
+
+
+def randpass(sampleset, n):
+    """Generate password n bytes long chosen from chars in
+    sampleset"""
+    random.shuffle(sampleset)
+    x = []
+    size = len(sampleset)
+    while n > 0:
+        if n > size:
+            s = size
+        else:
+            s = n
+
+        x += random.sample(sampleset, s)
+        n -= s
+
+    return ''.join(x)
+
+def gen_words(words, nwords=3):
+    """Generate random words from words and concatenate."""
+
+    random.shuffle(words)
+    v = random.sample(words, nwords)
+
+    return ' '.join(v)
+
+
+def randcase(w):
+    """Turn upto 4 letters into upper case"""
+    n     = random.randint(2, 4)
+    chars = list(w)
+    l     = len(chars)
+    while n > 0:
+        n -= 1
+        r = random.randint(0, l-1)
+        c = chars[r]
+        chars[r] = c.upper()
+
+    return ''.join(chars)
+
+
+# Hermaan Schaaf's clever routine doesn't use a dictionary :-)
+
+initial_consonants = (set(string.ascii_lowercase) - set('aeiou')
+                      # remove those easily confused with others
+                      - set('qxc')
+                      # add some crunchy clusters
+                      | set(['bl', 'br', 'cl', 'cr', 'dr', 'fl',
+                             'fr', 'gl', 'gr', 'pl', 'pr', 'sk',
+                             'sl', 'sm', 'sn', 'sp', 'st', 'str',
+                             'sw', 'tr'])
+                      )
+
+final_consonants = (set(string.ascii_lowercase) - set('aeiou')
+                    # confusable
+                    - set('qxcsj')
+                    # crunchy clusters
+                    | set(['ct', 'ft', 'mp', 'nd', 'ng', 'nk', 'nt',
+                           'pt', 'sk', 'sp', 'ss', 'st'])
+                    )
+
+vowels = 'aeiou' # we'll keep this simple
+
+# each syllable is consonant-vowel-consonant "pronounceable"
+syllables = map(''.join, itertools.product(initial_consonants, 
+                                           vowels, 
+                                           final_consonants))
+
+# you could throw in number combinations, maybe capitalized versions... 
+
+def gibberish(wordcount, wordlist=syllables):
+    return random.sample(wordlist, wordcount)
+
+def human_pass(wordcount=2, separate=False, capital=False):
+    sep = ' ' if separate else ''
+
+    g = gibberish(wordcount)
+    if capital:
+        g = [ x.capitalize() for x in g ]
+
+    return sep.join(g)
+
+
+usage = """%s: Simple utility to generate random passwords.
+
+Usage: %s [options] [count]""" % (sys.argv[0], sys.argv[0])
+
+parser = OptionParser(usage)
+parser.add_option("-0", "--print0", dest="print0", action="store_true",
+                  default=False,
+                  help="Use '\\0' as the separator between multiple passwords [%default]")
+parser.add_option("-n", "--numeric", dest="numeric_only",
+                  action="store_true", default=False,
+                  help="Only use Numbers '0-9' [%default]")
+parser.add_option("-a", "--alphanumeric", dest="alphanumeric",
+                  action="store_true", default=False,
+                  help="Only use Alphanumeric chars 'a-zA-Z0-9' [%default]")
+parser.add_option("-l", "--length", dest="length", type='int',
+                  default=9, metavar='L',
+                  help="Generate passwords of length 'L' [%default]")
+parser.add_option("-H", "--human-readable", dest="words", action="store_true",
+                  default=False,
+                  help="Generate human readable passwords [%default]")
+parser.add_option("-L", "--lowercase", dest="lowercase", action="store_true",
+                  default=False,
+                  help="Use lowercase for human readable passwords [%default]")
+parser.add_option("-s", "--separate", dest="spaceify", action="store_true",
+                  default=False,
+                  help="Use whitespace to delineate words in a password [%default]")
+parser.add_option("-w", "--words", dest="nwords", type="int", action="store",
+                  default=2, metavar="N",
+                  help="Generate N words of human readable password [%default]")
+parser.add_option("-C", "--capitalize", dest="capitalize", action="store_true",
+                  default=False,
+                  help="Capitalize first letter of a word [%default]")
+
+opt, args = parser.parse_args()
+
+n = len(args) > 0 and int(args[0]) or 1
+
+
+if opt.words:
+    sep = ' ' if opt.spaceify else ''
+
+    gen2 = lambda: human_pass(opt.nwords, opt.spaceify, opt.capitalize)
+
+    if opt.alphanumeric:
+        gen3 = lambda: gen2() + sep + randnum(4)
+    else:
+        gen3 = gen2
+
+    gen = gen3
+
+elif opt.numeric_only:
+    gen = lambda: randnum(opt.length)
+else:
+    chars = list(string.letters + string.digits)
+    if not opt.alphanumeric:
+        chars += list(r"+_!~@#%/`'\"[]{}")
+
+    gen = lambda: randpass(chars, opt.length)
+
+
+if opt.print0:
+    x = '\0'.join([ gen() for a in range(n) ])
+    sys.stdout.write(x)
+else:
+    while n > 0:
+        print gen()
+        n -= 1

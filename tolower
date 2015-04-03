@@ -1,0 +1,250 @@
+#! /usr/bin/env python
+
+#
+# Filename transformation Utility
+# Author: Sudhi Herle <sudhi@herle.net>
+# License: GPLv2
+# Copyright: 2002-2009 (c) Sudhi Herle
+#
+
+import os, sys, os.path
+from os.path import basename, dirname, join
+from optparse import Option, OptionParser, OptionValueError
+
+Z       = basename(sys.argv[0])
+__doc__ = """%(Z)s [options] file|dir [file|dir ...]
+
+%(Z)s - Transform filenames intelligently.
+
+Unless "-r", "--recursive" is specified, the tool will NOT descend directories
+named on the command line.
+
+Name transformation options below can be used together. The order in which they
+are used will determine the 'compound' effect. e.g.,::
+
+    %(Z)s -N -L  'ABC DEF.txt'  => 'abc_def.txt'
+
+If we want to remove spaces and use upper case for first letter::
+
+    %(Z)s -N -M  'abc def GHI.txt' => 'Abc_Def_GHI.txt'
+
+The above example preserves the case of second and subsequent letters.
+
+If we only want to remove spaces and preserve case::
+
+    %(Z)s -N -P 'abc DEF Ghi.TXT' => 'abc_DEF_Ghi.TXT'
+
+If we want to remove spaces, convert all to lower case and change first letter of
+each word to upper case::
+
+    %(Z)s -N -L -M 'ABC DEF GHI.TXT' => 'Abc_Def_Ghi.txt'
+
+Note that "-L" and "-P"  are mutually _exclusive_ options.
+""" % { 'Z': Z }
+
+
+# Intelligent renamer that works around Win32 limitations
+if sys.platform in ('win32', 'cygwin'):
+    def real_rename(old, new):
+        if os.path.exists(new):
+            os.unlink(new)
+        os.rename(old, new)
+else:
+    def real_rename(old, new):
+        os.rename(old, new)
+
+
+def dummy_rename(old, new):
+    """Print what would happen"""
+    print "mv '%s'     '%s'" % (old, new)
+
+def verbose_real(fmt, *args):
+    sfmt = fmt
+    if args:
+        sfmt = fmt % args
+    print sfmt
+    sys.stdout.flush()
+
+def no_verbose(fmt, *args):
+    pass
+
+
+def no_spaces(name):
+    """Remove all spaces from 'name'"""
+    str = ""
+    for c in name:
+        if c.isspace():
+            c = "_"
+        str += c
+    return str
+
+def mixed_case(name):
+    """Make upper case at start of word"""
+    word_boundary = " \t\r\n-_"
+    boundary = dict([(a, True) for a in word_boundary])
+    str = ""
+    start = True
+    for c in name:
+        if start:
+            c = c.upper()
+
+        if c in boundary:
+            start = True
+        else:
+            start = False
+
+        str += c
+
+    return str
+
+def lower_case(name):
+    """Transform name to all lowercase"""
+    return name.lower()
+
+def null_case(name):
+    """Don't mangle the name"""
+    return name
+
+class compose:
+    def __init__(self, *args):
+        self.args = []
+        for a in args:
+            self.args.append(a)
+
+    def __call__(self, args):
+        for a in self.args:
+            args = a(args)
+
+        return args
+
+
+def do_rename(a, b):
+    global rename
+
+    try:
+        rename(a, b)
+    except Exception, e:
+        print >>sys.stderr, "Can't rename '%s' -> '%s': %s" % (a, b, str(e))
+
+def lowerize(p, transform):
+    """Convert 'p' to lowercase"""
+    global rename
+
+    b  = basename(p)
+    d  = dirname(p)
+    lb = transform(b)
+    if lb != b:
+        np = join(d, lb)
+        verbose("'%s' -> '%s'", b, lb)
+        do_rename(p, np)
+
+def recurse(p, transform):
+
+    for root, dirs, files in os.walk(p, 1):
+        # First mangle the leaf nodes (files)
+        for f in files:
+            lb = transform(f)
+            if lb != f:
+                op = join(root, f)
+                np = join(root, lb)
+                verbose("'%s' -> '%s'", op, np)
+                do_rename(op, np)
+
+        # Then, mangle the directories, but replace the name in place - so that
+        # the walker can descend properly
+        i = -1
+        for f in dirs:
+            i += 1
+            lb = transform(f)
+            if lb != f:
+                dirs[i] = lb
+                op = join(root, f)
+                np = join(root, lb)
+                verbose("'%s' -> '%s'", op, np)
+                do_rename(op, np)
+
+
+def unit_test(transform):
+    test_vectors = ['abc.txt', 'abc DEF ghi.txt', 'ABC DEF.txt', 'Abc_Def.txt', 'ABC.TXT' ]
+    for t in test_vectors:
+        n = transform(t)
+        print "%s => %s" % (t, n)
+
+
+# -- main --
+
+if len(sys.argv) < 2:
+   print >>sys.stderr, "Usage: %s file [...]" % sys.argv[0]
+   sys.exit(1)
+
+rename  = dummy_rename
+verbose = no_verbose
+
+parser  = OptionParser(__doc__)
+
+parser.add_option("-r", "--recursive", dest="recurse", action="store_true",
+                  default=False,
+                  help="Recurse any directories mentioned [False]")
+parser.add_option("-v", "--verbose", dest="verbose", action="store_true",
+                  default=False,
+                  help="Show verbose progress messages [False]")
+parser.add_option("-n", "--dry-run", dest="dry_run", action="store_true",
+                  default=False,
+                  help="Don't rename files; only show what would be done [False]")
+parser.add_option("-L", "--lower-case", dest="lower_case", action="store_true",
+                  default=True,
+                  help="Transform all upper case with lower case [True]")
+parser.add_option("-P", "--perserve-case", dest="lower_case", action="store_false",
+                  default=True,
+                  help="Preserve case of file names [False]")
+parser.add_option("-N", "--no-spaces", dest="no_spaces", action="store_true",
+                  default=False,
+                  help="Replace all spaces with '_' [False]")
+parser.add_option("-M", "--mixed-case", dest="mixed_case", action="store_true",
+                  default=False,
+                  help="Use upper case at start of 'word' [False]")
+
+(opt, args) = parser.parse_args()
+
+if len(args) < 1:
+    print >>sys.stderr, "%s: Insufficient arguments. Try '%s --help'" % (Z, Z)
+    sys.exit(1)
+
+
+transform = null_case
+#print opt
+if opt.lower_case:
+    transform = compose(transform, lower_case)
+
+if opt.no_spaces:
+    transform = compose(transform, no_spaces)
+
+if opt.mixed_case:
+    transform = compose(transform, mixed_case)
+
+
+# TEST
+#opt.dry_run = True
+
+# Don't overdo verbosity
+if opt.dry_run:
+    opt.verbose = False
+else:
+    rename = real_rename
+
+if opt.verbose:
+    verbose = verbose_real
+
+#unit_test(transform)
+
+for p in args:
+    p = os.path.normpath(p)
+    if os.path.isdir(p):
+        if opt.recurse:
+            recurse(p, transform)
+        lowerize(p, transform)
+    elif os.path.isfile(p):
+        lowerize(p, transform)
+
+
+# vim: expandtab:sw=4:ts=4:notextmode:tw=82:

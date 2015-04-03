@@ -1,0 +1,34 @@
+#! /bin/bash
+
+
+#set -x 
+find_usb_disk() {
+    disk=
+    entries=`ls /sys/block | sort`
+    for e in $entries; do
+        d=/sys/block/$e
+        n=`readlink $d | grep usb | wc -l`
+        if [ $n -eq 0 ]; then
+            continue
+        fi
+
+        i=`basename $d`
+        dev=/dev/$i
+        sys=/sys/block/$i
+
+        rm=`cat $sys/removable`
+        if [ $rm -eq 0 ]; then
+            continue    # ignore fixed disks
+        fi
+
+        
+        sz=`cat $sys/size`
+        if [ $sz -gt 0 ]; then
+            echo $dev
+        fi
+    done
+
+    return 0
+}
+
+find_usb_disk

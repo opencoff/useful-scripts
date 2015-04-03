@@ -1,0 +1,75 @@
+#! /usr/bin/env python
+
+# Find and display symlinks that are dead
+# (c) 2010 Sudhi Herle <sudhi at herle.net>
+# License: GPLv2
+
+import os, os.path, sys
+from optparse import OptionParser
+from os.path import isabs, normpath, exists, dirname, join
+
+Z = os.path.basename(sys.argv[0])
+V = '0.1.2'
+__doc__ = """%(Z)s [options] [dir...]
+
+%(Z)s finds and display's dead symlinks""" % { 'Z': Z, 'Version': V}
+
+
+def check(dn, e, p):
+    """Check if "dn/e" is a valid symlink.
+    Update dict p and return it."""
+
+    n = join(dn, e)
+    if not os.path.islink(n):
+        return p
+
+    r = normpath(os.readlink(n))
+    if not os.path.isabs(r):
+        r  = join(dn, r)
+
+    if not os.path.exists(r):
+        p[n] = r
+
+    return p
+
+
+def walk(dname):
+    """Walk the directory d"""
+    p = {}
+    for root, dirs, files in os.walk(dname, 1):
+        for f in files:
+            check(root, f, p)
+
+    return p
+
+
+def scan(dname):
+    """Scan directory dname for deadlinks"""
+    p = {}
+    for e in os.listdir(dname):
+        check(dname, e, p)
+
+    return p
+
+
+pp = OptionParser(__doc__, version=V)
+pp.add_option("-r", "--recurse", dest="recurse", action="store_true",
+              default=False,
+              help="Scan all directories recursively [%default]")
+
+oo, aa = pp.parse_args()
+
+if len(aa) < 1:
+    aa.append('.')
+
+
+for d in aa:
+    if not os.path.isdir(d):
+        continue
+
+    s = oo.recurse and walk(d) or scan(d)
+    if len(s) > 0:
+        print '\n'.join(s.keys())
+
+# EOF
+# vim: sw=4:ts=4:expandtab:tw=78:notextmode:

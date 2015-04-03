@@ -1,0 +1,14 @@
+#! /bin/bash
+
+
+pwd=`pwd`
+
+for i in $*
+do
+    abs=${i##/}
+    if [ "$abs" = "$i" ]; then
+        echo "$pwd/${i#./}"
+    else
+        echo "$i"
+    fi
+done
