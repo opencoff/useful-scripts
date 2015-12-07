@@ -14,6 +14,16 @@ license. Don't ask - its just my preference.
 
 Brief Blurb about Each
 ======================
+
+mkgetopt
+--------
+This subdirectory has a standalone Python tool to generate command line
+parsing code for use in C/C++ programs. It uses ``getopt_long()``
+and removes tedium around command line processing. It comes with a
+manpage and examples.
+
+Scripts
+-------
 ::
 
     abspath           when you need command line access to os.path.abspath()
@@ -73,6 +83,8 @@ to launchd control.::
                       interface and use it with that.
     osx-tuntap.sh     Make your tun-tap driver persistent.
 
+
+The ramfs.sh and randmac.sh files have been tested to work on OS X Yosemite.
 
 Linux Specific Tools
 --------------------

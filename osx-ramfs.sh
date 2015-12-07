@@ -1,4 +1,4 @@
-#! /bin/bash
+#! /bin/ksh
 
 #
 # Create and mount a ramfs disk for OS X
@@ -17,9 +17,14 @@
 #   - '$0 install' will turn this into a LaunchDaemon
 #
 
+set -x
+
+PATH=/sbin:/usr/sbin:/bin:/usr/bin:$PATH
+export PATH
+
 # >>>  Tunables <<<
 # size of /tmp in MB
-TMP_SIZE=512
+TMP_SIZE=768
 
 # size of /var/run in MB
 VAR_RUN_SIZE=8
@@ -34,7 +39,6 @@ if [ $me -ne 0 ]; then
     e=echo
 fi
 
-#set -x
 
 usage() {
     cat 1>&2 <<EOF1
@@ -50,14 +54,14 @@ EOF1
 }
 
 mount_ramdisk() {
-    local sz=$1     # Size is in MB
-    local dest=$2
+    typeset sz=$1     # Size is in MB
+    typeset dest=$2
 
     # OS X likes sectors
     # sects = (MB * 1024 * 1024) / 512
-    local sects=$(( $sz * 1024 * 2 ))
+    typeset sects=$(( $sz * 1024 * 2 ))
 
-    local dev
+    typeset dev
 
     if [ $me -eq 0 ]; then
         dev=`hdik -drivekey system-image=yes -nomount ram://$sects`
@@ -70,32 +74,34 @@ mount_ramdisk() {
     fi
 
     # We don't care about the journal.
-    $e newfs_hfs -v "RAMFS_${sz}MB" $dev
+    $e newfs_hfs -v "RAMFS_${sz}MB" $dev    || return 1
 
     # Grok the original perms and mode on the mountpoint
     eval `stat -s $dest`
 
-    $e mount -t hfs -o noatime,nobrowse,union $dev $dest
+    $e mount -t hfs -o noatime,nobrowse,union $dev $dest    || return 1
 
     # Replicate it on the new mount point
     $e chown $st_uid:$st_gid $dest
     $e chmod $st_mode $dest
+
+    echo "Mounted $dev at $dest ($sz MB)"
     return 0
 }
 
 
 # Installs a startup service
 install_service() {
-    local idir=/Library/LaunchDaemons
-    local bn=`basename $0`
-    local prog=/etc/$bn
+    typeset idir=/Library/LaunchDaemons
+    typeset bn=`basename $0`
+    typeset prog=/etc/$bn
 
     if [ $me -ne 0 ]; then
         idir=/tmp/ramfs
         mkdir -p $idir
     fi
 
-    local file=$idir/${FNAME}.plist
+    typeset file=$idir/${FNAME}.plist
 
     cat > $file <<EOF2
 <?xml version="1.0" encoding="UTF-8"?>
@@ -114,11 +120,18 @@ install_service() {
     <key>GroupName</key>
     <string>wheel</string>
 
-    <key>Debug</key>
-    <false/>
-
+    <!-- Yosemite unmounts shit once the script completes. WTF. -->
     <key>KeepAlive</key>
-    <false/>
+    <dict>
+        <key>PathState</key>
+        <dict>
+            <key>/private/tmp</key>
+            <false/>
+
+            <key>/var/run</key>
+            <false/>
+        </dict>
+    </dict>
 
     <key>RunAtLoad</key>
     <true/>
@@ -128,6 +141,11 @@ install_service() {
         <string>$prog</string>
         <string>start</string>
     </array>
+
+    <key>StandardErrorPath</key>
+    <string>/var/log/$FNAME-err.log</string>
+    <key>StandardOutPath</key>
+    <string>/var/log/$FNAME-out.log</string>
 
 </dict>
 </plist>
@@ -152,9 +170,11 @@ fi
 case $1 in
     start)
         echo "Initializing RAM disk for /tmp and /var/run .."
-
+        sleep 5
         mount_ramdisk $TMP_SIZE /private/tmp
         mount_ramdisk $VAR_RUN_SIZE   /var/run
+        mount
+        df -h
         ;;
 
     stop|restart)

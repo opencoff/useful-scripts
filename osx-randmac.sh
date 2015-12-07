@@ -4,8 +4,6 @@
 # Setup OS X with a random mac address for WiFi or a specific
 # interface.
 #
-# License: Public Domain
-#
 # Order of doing things
 #  - disassociate from any network
 #  - update airport interface with random mac address
@@ -16,9 +14,18 @@
 FNAME=net.spoof.mac
 airport=/System/Library/PrivateFrameworks/Apple80211.framework/Resources/airport
 net=/usr/sbin/networksetup
+ipconfig=/usr/sbin/ipconfig
 Z=`basename $0`
 
-usage() {
+PATH=/sbin:/usr/sbin:/bin:/usr/bin:$PATH
+export PATH
+
+#set -x
+
+# First dump existing config to stderr
+#ifconfig -a 1>&2
+
+function usage {
     cat 1>&2 <<EOF1
 $Z - Randomize MAC address of OS X WiFi (or any given interface).
 
@@ -75,7 +82,7 @@ fi
 
 #set -x
 
-grok_wifi_darwin() {
+function grok_wifi_darwin {
     typeset iface=$1
 
     if [ -n "$iface" ]; then
@@ -89,6 +96,13 @@ grok_wifi_darwin() {
 
         # Run scutil to get interface state which has AirPort in it
         typeset xx=`echo list | scutil | grep State: | grep -i AirPort | cut -d= -f2`
+
+        if [ -z "$xx" ]; then
+            echo list | scutil 1>&2
+            echo "$Z: Whoa. Can't find any WiFi interface!" 1>&2
+            exit 1
+        fi
+
         typeset dx=`dirname $xx`
         iface=`basename $dx`
 
@@ -101,7 +115,7 @@ grok_wifi_darwin() {
     # Now, lets make sure this is really a wireless interface
     xx=`$net -getairportnetwork $iface`
     if [ $? -ne 0 ]; then
-        echo "$Z: $iface doesn't look like a WiFi interface.."
+        echo "$Z: $iface doesn't look like a WiFi interface.." 1>&2
         exit 1
     fi
 
@@ -109,8 +123,51 @@ grok_wifi_darwin() {
 }
 
 
+# Ugly hack to wait for an interface to come up
+# The problem seems to have started with Yosemite!
+function wait_wifi_darwin {
+    typeset max=10
+    typeset i=0
+    typeset iface=
+
+
+    while [ $i -lt 10 ]; do
+        i=$(( i + 1 ))
+
+        # Run scutil to get interface state which has AirPort in it
+        typeset xx=`echo list | scutil | grep State: | grep -i AirPort | cut -d= -f2`
+
+        if [ -z "$xx" ]; then
+            sleep 2
+            continue
+        fi
+
+        typeset dx=`dirname $xx`
+        iface=`basename $dx`
+        if [ -z "$iface" ]; then
+            sleep 2
+            continue
+        fi
+
+        # Now, lets make sure this is really a wireless interface
+        xx=`$net -getairportnetwork $iface`
+        if [ $? -ne 0 ]; then
+            echo "$Z: $iface doesn't look like a WiFi interface.." 1>&2
+            exit 1
+        fi
+
+        echo $iface
+        return 0
+        
+    done
+
+    echo "$Z: Can't grok WiFi interface after 10 tries!" 1>&2
+    exit 1
+}
+
+
 # Verify that a given interface is really a wifi interface.
-verify_wifi_Darwin() {
+function verify_wifi_Darwin {
     typeset iface=$1
     typeset x=`echo list | scutil | grep "State:/Network/Interface/$iface/AirPort"`
 
@@ -118,18 +175,23 @@ verify_wifi_Darwin() {
         echo "$Z: $iface is not a WiFi interface" 1>&2
         return 1
     fi
+    $e ifconfig $iface down
     return 0
 }
 
 
 # Generate a random mac address
-_randmac() {
-    # These are VMware, Xen and Parallels OUIs
-    set -A vendors "00:05:69" "00:0c:29" "00:1c:14" "00:50:56" \
-                   "00:1c:42" "00:16:3e"
-    typeset n=${#vendors[@]}
+function _randmac {
+    # Generate random bytes
+    typeset randstr=$(dd if=/dev/urandom bs=4 count=1 2>/dev/null| od -t xC)
 
-    set -A rand -- $(dd if=/dev/urandom bs=4 count=1 2>/dev/null| od -t xC)
+    # These are VMware, Xen and Parallels OUIs
+    typeset -a vendors=("00:05:69" "00:0c:29" "00:1c:14" "00:50:56" \
+                        "00:1c:42" "00:16:3e")
+    typeset -a rand=($randstr)
+
+    # Number of vendors (length of array)
+    typeset n=${#vendors[@]}
 
     # rand[0] and rand[5] are offsets; we can ignore them.
     typeset a1=${rand[1]}
@@ -143,17 +205,24 @@ _randmac() {
     echo "$pref:$a1:$a2:$a3"
 }
 
-update_mac() {
+function update_mac {
     typeset iface=$1
     typeset mac=$(_randmac)
 
-
     # Updating MAC requires us to turn on the WiFi iface
 
+
+    # First disassociate from any connected WiFi
+    #$e $ipconfig set $iface NONE
+
     $e $airport -z || return $?
-    $e $net -setairportpower $iface off
+
+    $e ifconfig $iface down
+
+    #$e $net -setairportpower $iface off; sleep 2;
     $e $net -setairportpower $iface on
-    $e ifconfig $iface ether $mac || return $?
+    $e ifconfig $iface ether $mac up || return $?
+
     $e $net -detectnewhardware
 
     return 0
@@ -161,7 +230,7 @@ update_mac() {
 
 
 # Installs a startup service
-install_service() {
+function install_service {
     typeset bn=`basename $Z`
     typeset prog=$bindir/$bn
 
@@ -187,9 +256,6 @@ install_service() {
 
     <key>GroupName</key>
     <string>wheel</string>
-
-    <key>Debug</key>
-    <false/>
 
     <key>KeepAlive</key>
     <false/>
@@ -219,7 +285,7 @@ EOF2
 
 iface=$1
 if [ -z "$iface" ]; then
-    iface=`grok_wifi_darwin`
+    iface=`wait_wifi_darwin`
 
     if [ -z "$iface" ]; then
       echo "$Z: Can't figure out the WiFi interface. Aborting..." 1>&2
@@ -233,6 +299,7 @@ else
 fi
 FNAME=${FNAME}.$iface
 
+$e ifconfig $iface down
 
 case $action in
     start|update)
