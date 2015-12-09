@@ -2,14 +2,17 @@
 
 #
 # Script to find duplicate files
+# Uses multiprocessing to scan files in parallel.
+#
 # Sudhi Herle <sudhi@herle.net>
 # GPLv2
 #
 
 import os, sys, os.path
-import re, zlib
-from os.path  import basename, dirname, join
+import re, zlib, mmap
+from os.path  import basename, dirname, join, isfile, isdir
 from optparse import Option, OptionParser, OptionValueError
+import multiprocessing as m
 
 try:
     import hashlib
@@ -18,6 +21,19 @@ except:
     import md5
     md5sum = md5.md5
 
+KB = 1024L
+MB = 1024L * KB
+GB = 1024L * MB
+TB = 1024L * GB
+PB = 1024L * TB
+
+Divisors = [
+    ('PB', PB),
+    ('TB', TB),
+    ('GB', GB),
+    ('MB', MB),
+    ('kB', KB),
+    ]
 
 usage = """%s dir [dir...]
 
@@ -52,47 +68,86 @@ def ignore(name):
 
     return False
 
+class bundle:
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+
 class cksum_db:
     def __init__(self, cksum):
-        self.db  = {}
+        self.w   = {}
+        self.m   = m.Pool(processes=None)
         self.cksum = cksum
 
-    def addfile(self, filename):
-        v = self.cksum(filename)
-        a = self.db.setdefault(v, [])
-        a.append(filename)
-        #print a
+    def addfile(self, fn):
+        x = self.m.apply_async(self.cksum, args=(fn,))
+        self.w[fn] = x
+
 
     def dups(self):
         """Return a dict of duplicate files. Each entry in the dict
         is an array of files - whose contents are identical according to
         the checksum criteria of the class."""
 
-        ck = dict([(k,v) for k, v in self.db.items() if len(v) > 1])
+        db = {}
+        for k, v in self.w.items():
+            z = v.get()
+            a = db.setdefault(z.cksum, [])
+            a.append(z)
+            #print a
+
+        ck = dict([(k,v) for k, v in db.items() if len(v) > 1])
         return ck
 
-def cksum_slow(filename):
-    m = md5sum()
-    fd = open(filename, "rb")
-    while True:
-        chunk = fd.read(65536)
-        if not chunk:
-            break
-        m.update(chunk)
+
+def mmap_gen(fn):
+    """Generator that yields mmap'd chunks of memory and length"""
+    MM_CHUNKSIZE = 2L * GB
+
+    fd  = open(fn, 'rb')
+    fdn = fd.fileno()
+    st  = os.fstat(fdn)
+    n   = 0L + st.st_size
+    off = 0L
+    while n > 0:
+        z  = MM_CHUNKSIZE if n > MM_CHUNKSIZE else n
+        try:
+            mm = mmap.mmap(fdn, z, access=mmap.ACCESS_READ, offset=off)
+            yield mm, z
+        except Exception, ex:
+            ss = "can't mmap %d bytes of %s: %s" % (z, fn, str(ex))
+            raise Exception(ss)
+        mm.close()
+
+        n   -= z
+        off += z
+
     fd.close()
 
-    return m.hexdigest()
+
+def cksum_slow(filename):
+    m  = md5sum()
+    sz = 0L
+
+    for mm, n in mmap_gen(filename):
+        buf = mm.read(n)
+        m.update(buf)
+        sz += n
+
+    b = bundle(size=sz, fname=filename, cksum=m.hexdigest())
+    return b
 
 def cksum_quick(filename):
     v  = 0L
-    fd = open(filename, "rb")
-    while True:
-        chunk = fd.read(65536)
-        if not chunk:
-            break
-        v = zlib.adler32(chunk, v)
-    fd.close()
-    return "%#x" % v
+    sz = 0L
+    for mm, n in mmap_gen(filename):
+        buf = mm.read(n)
+        v   = zlib.adler32(buf, v)
+        sz += n
+
+    v = -v if v < 0 else v
+    x = "%#x" % v
+    b = bundle(size=sz, fname=filename, cksum=x)
+    return b
 
 
 def descend(db, dn):
@@ -101,8 +156,55 @@ def descend(db, dn):
     for root, dirs, files in os.walk(dn, 1):
         for f in files:
             here = join(root, f)
+            if not isfile(here): continue
             if not ignore(here):
                 db.addfile(here)
+
+def human(n):
+    """Return human readable size for n bytes"""
+    global Divisors
+    for d in Divisors:
+        sz = d[1]
+        if n > sz:
+            s = "%4.2f %s" % (float(n) / sz, d[0])
+            return s
+
+    return "%lu" % n
+
+
+class shell:
+    """Abstraction to print shell commands to remove dups"""
+
+    def __init__(self):
+        self.tot = 0L
+        print "#! /bin/sh\n"
+
+    def dups(self, k, keep, rm):
+        waste     = keep.size * len(rm)
+        self.tot += waste
+        s = '\n'.join([ "rm -f '%s'" % x.fname for x in rm ])
+        print "# %s: %s, saving %s\n#rm -f '%s'\n%s\n" % \
+                (k, human(keep.size), human(waste), keep.fname, s)
+
+    def finish(self):
+        print "# %s saved" % human(self.tot)
+
+
+class plain:
+    """Abstraction to simply print the duplicated files"""
+    def __init__(self):
+        self.tot = 0L
+        print "Report of duplicate files\n"
+
+    def dups(self, k, keep, rm):
+        waste     = keep.size * len(rm)
+        self.tot += waste
+        s = '\n\t'.join( [x.fname for x in rm ])
+        print "%s: %s, wasted %s\n\tKEEP %s\n%s" % \
+                (k, human(keep.size), human(waste), keep.fname, s)
+
+    def finish(self):
+        print "\n%s total wasted space" % human(self.tot)
 
 
 # We detect dups in two stages.
@@ -111,8 +213,14 @@ def descend(db, dn):
 # are identical or just a checksum collision.
 # So, for those files, we use a strong checksum to disambiguate.
 db = cksum_db(cksum_quick)
+zargs = []
 for d in args:
+    if not isdir(d):
+        print >>sys.stderr, "Skipping non-directory %s" % d
+        continue
+
     descend(db, d)
+    zargs.append(d)
 
 
 # Now, we use a slow checksum for the files that maybe dups
@@ -121,17 +229,19 @@ dups = db.dups()
 for k, v  in dups.items():
     for f in v:
         #print "# maybe dup %s => %s" % (k, f)
-        db2.addfile(f)
+        db2.addfile(f.fname)
 
-dups = db2.dups()
-if opt.shell_cmds:
-    for k, v in dups.items():
-        keep = v[-1]    # Keep the last one
-        s = [ "rm -f '%s'" % x for x in v[:-1] ]
-        print "# %s:\n# %s\n" % (k, '\n# '.join(v))
-        print "# %s: Keep '%s'\n%s\n" % (k, keep, '\n'.join(s))
-else:
-    for k, v  in dups.items():
-        print "%s:\n\t%s" % (k, '\n\t'.join(v))
+dups  = db2.dups()
+
+# We always keep the files in first arg
+pr    = shell() if opt.shell_cmds else plain()
+
+for k, v in dups.items():
+    keep = v[0]
+    rm   = v[1:]
+
+    pr.dups(k, keep, rm)
+
+pr.finish()
 
 # vim: expandtab:sw=4:ts=4:tw=72:notextmode:

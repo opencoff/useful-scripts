@@ -24,37 +24,45 @@ manpage and examples.
 
 Scripts
 -------
-::
+Many of these scripts have builtin help (``--help``); they are
+identified with a suffix of ``*``. ::
 
-    abspath           when you need command line access to os.path.abspath()
-    isabs             when you need command line access to os.path.isabs()
-    realpath          when you need command line access to os.path.realpath()
-    aes.py            AES encrypt a file in CTR mode with random salt
-    cert-tool.py      Tool to make you into a light weight X.509 CA
-    comic2pdf         If you have bunch of CBRs and want PDFs instead
-    deadlinks         Show me symlinks that point to non existent files
-    dos2unix.py       Turn CRLF into LF
-    finddup           If you have identical files strewn around in your file system
-    hexlify           hexlificate your stdin
+    abspath            when you need command line access to os.path.abspath()
+    isabs              when you need command line access to os.path.isabs()
+    realpath           when you need command line access to os.path.realpath()
+    aes-test.sh        Self-test for aes.py (tests various sizes)
+    mk-raw-vmware.py   The name says it all; make a raw disk with no holes
+    randmac            Print a semi-random mac address
+    rename             Rename files based on regex. Yes, its Perl.
+    rotatedir          Rotate a directory with newest name ending in .0 suffix
+    xdump              I forget how to use hexdump. Hence this short alias
 
-    kill.py           Cross platform PID/name based kill utility with interactive prompts.
-                      alias kill=kill.py  works very nicely.
+    server-backup      Script I use to backup remote machines via SSH. Customize it for
+                       your use case.
 
-    make-tunnel.py    Create IPSec tunnels with preshared keys (site-to-site VPN). Tested on Linux,
-                      easy to adapt to other OSes.
+    aes.py          *  AES encrypt a file in CTR mode with random salt
+    cert-tool.py    *  Tool to turn you into a light weight X.509 CA
+    comic2pdf       *  If you have bunch of CBRs and want PDFs instead
+    deadlinks       *  Show me symlinks that point to non existent files
+    dos2unix.py     *  Turn CRLF into LF
+    finddup         *  If you have identical files strewn around in your file system
+    hexlify         *  hexlificate your stdin
 
-    mk-raw-vmware.py  The name says it all; make a raw disk with no holes
-    pingsubnet.py     Ping multiple addresses in a subnet and get results back
-    randmac           Print a semi-random mac address
-    randpass          Experiments in generating random passwords
-    rename            Rename files based on regex. Yes, its Perl.
-    rotatedir         Rotate a directory with newest name ending in .0 suffix
-    rsync-backup.py   Backup using rsync and hardlinks
-    tolower           Play with file names and their case. Try 'tolower --help'
-    xdump             I forget how to use hexdump. Hence this short alias
+    kill.py         *  Cross platform, interactive way to kill processes by name/PID
+                       alias kill=kill.py  works very nicely.
+                       'q' in the prompt cleanly exits the tool.
 
-    server-backup     Script I use to backup remote machines via SSH. Customize it for your use
-                      case.
+    rm.py           *  Cross platform, interactive way to remove files
+                       alias rm=rm.py  saves you from unwanted pain.
+                       'q' in the prompt cleanly exits the tool.
+
+    make-tunnel.py  *  Create IPSec tunnels with preshared keys (site-to-site VPN). Tested on
+                       Linux, easy to adapt to other OSes.
+
+    pingsubnet.py   *  Ping multiple addresses in parallel for a subnet and get results back;
+    randpass        *  Experiments in generating random passwords
+    rsync-backup.py *  Backup using rsync and hardlinks
+    tolower         *  Play with file names and their case. Try 'tolower --help'
 
 ovpn-tool.py      
 ------------

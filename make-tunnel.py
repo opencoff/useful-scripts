@@ -1,8 +1,9 @@
 #! /usr/bin/env python
 
-import sys, os, string
+import sys, os, os.path
 import time, datetime
-import random
+from binascii import hexlify
+import argparse, subprocess
 
 
 #
@@ -10,43 +11,53 @@ import random
 # Linux/BSD 'setkey' utility
 #
 # Author: Sudhi Herle <sudhi@herle.net>
+# Created on: June 13, 2005
 # License: GPLv2
 #
 
+Z        = os.path.basename(sys.argv[0])
+__doc__  = """%s helps create site-to-site VPN config with pre-shared random keys.""" % Z
+Epilog   = """LOCAL and REMOTE specification is of the form:
 
-# Customizations go here.
+    PublicIP:subnet1[,subnet2,subnet3...]
 
-# Subnets in India
-remote_nets = [ "192.168.1.0/24", "192.168.2.0/24", ]
+e.g.,
+%s  55.66.77.88:192.168.5.0/24,192.168.10.0/24   100.100.200.200:172.16.0.0/16
 
-# Subnets in US
-local_nets    = [ "172.16.1.0/24",  "172.16.2.0/24", ]
+The above invocation will setup a tunnel between the "local" subnets
+192.168.5.0/24, 192.168.10.0/24  and the "remote" subnet 172.16.0.0/16.
+This tunnel uses the local public IP of 55.66.77.88 and remote public IP of
+100.100.200.200.
+""" % Z
 
-# Public IP addresses - remote & local
-remote_pub    = "55.66.77.88"
-local_pub     = "100.100.100.100"
 
-#
-# DO NOT MODIFY ANYTHING BELOW THIS
-#
+def warn(fmt, *args):
+    s = "%s: %s" % (Z, fmt)
+    if args:                 s  = s % args
+    if not s.endswith('\n'): s += '\n'
 
-def randpass(len):
+    sys.stderr.write(s)
+    sys.stderr.flush()
+
+def die(fmt, *args):
+    warn(fmt, *args)
+    sys.exit(1)
+
+def randhexstr(n):
     """Make a random password and return as string"""
 
-    r   = random.Random()
-    str = ""
-    n   = len
-    while n > 0:
-        n -= 1
-        str += "%02x" % r.randint(0, 255)
+    return hexlify(os.urandom(n))
 
-    return str
+
+def rand32():
+    """Return a random 32-bit integer"""
+    s = os.urandom(4)
+    return ord(s[0]) | (ord(s[1]) << 8) | (ord(s[2]) << 16) | (ord(s[3]) << 24)
 
 
 # Security identifiers for each part of the tunnel
-r = random.Random()
-remote_local_spi = "%#0#x" % r.randint(0, 0xffffffff)
-local_remote_spi = "%#08x" % r.randint(0, 0xffffffff)
+remote_local_spi = "%#0#x" % rand32()
+local_remote_spi = "%#08x" % rand32()
 
 sel_template = """spdadd %(there)s  %(here)s any -P %(direction)s ipsec
     esp/tunnel/%(remote)s-%(local)s/require;
@@ -66,29 +77,24 @@ prologue = """#! /usr/sbin/setkey -f
 flush;
 spdflush;
 
-add %(remotepub)s %(uspub)s esp %(remote_local_spi)s
-    -m tunnel
-    -E aes-cbc 0x%(aespass)s
-    -A hmac-sha1 0x%(hmacpass)s;
+#
+# For AES-CTR mode keyspec is 36 bytes long:
+#  - first 256 bits (32 bytes) are used as the key
+#  - last   32 bits ( 4 bytes) are used as nonce
+#
 
-add %(uspub)s %(remotepub)s esp %(local_remote_spi)s
+add %(remotepub)s %(localpub)s esp %(remote_local_spi)s
     -m tunnel
-    -E aes-cbc 0x%(aespass)s
-    -A hmac-sha1 0x%(hmacpass)s;
+    -E aes-ctr       0x%(RL_enc)s
+    -A hmac-sha2-256 0x%(RL_mac)s;
+
+add %(localpub)s %(remotepub)s esp %(local_remote_spi)s
+    -m tunnel
+    -E aes-ctr       0x%(LR_enc)s
+    -A hmac-sha2-256 0x%(LR_mac)s;
 
 """
 
-prologue_remote = """
-add %(remotepub)s %(uspub)s esp %(remote_local_spi)s
-    -m tunnel
-    -E aes-cbc 0x%(aespass)s
-    -A hmac-sha1 0x%(hmacpass)s;
-
-add %(uspub)s %(remotepub)s %esp %(local_remote_spi)s
-    -m tunnel
-    -E aes-cbc 0x%(aespass)s
-    -A hmac-sha1 0x%(hmacpass)s;
-"""
 
 
 epilogue = """# End of rules
@@ -120,17 +126,33 @@ def add_rule(local, remote, here_nets, there_nets, direction):
     return rules
 
 
-def writefile(fn, str):
-    fd = open(fn, "w")
-    fd.write(str)
+def writefile(fn, s):
+    tmp = "%s%u" % (fn, rand32())
+    fd  = open(tmp, "w")
+    fd.write(s)
     fd.close()
+    os.chmod(tmp, 0600)
+    os.rename(tmp, fn)
 
-def local_to_remote(d, outfile):
-    in_rules  = add_rule(local_pub, remote_pub, local_nets, remote_nets, 'in')
-    out_rules = add_rule(remote_pub, local_pub, remote_nets, local_nets, 'out')
 
-    d['local']  = local_pub
-    d['remote'] = remote_pub
+def a_to_b(d, b, outfile):
+
+    in_rules  = add_rule(b.A, b.B, b.Anets, b.Bnets, 'in')
+    out_rules = add_rule(b.B, b.A, b.Bnets, b.Anets, 'out')
+    #in_rules  = add_rule(lpub, rpub, lnets, rnets, 'in')
+    #out_rules = add_rule(rpub, lpub, rnets, lnets, 'out')
+
+    #d['local_remote_spi'] = b.AB_spi
+    #d['remote_local_spi'] = b.BA_spi
+    #d['LR_enc'] = b.AB_ekey
+    #d['RL_enc'] = b.BA_ekey
+
+    #d['LR_mac'] = b.AB_mkey
+    #d['RL_mac'] = b.BA_mkey
+
+    d['local']  = b.A
+    d['remote'] = b.B
+
     rules  = prologue % d
     rules += """
 
@@ -143,42 +165,107 @@ def local_to_remote(d, outfile):
 
     writefile(outfile, rules)
 
-def remote_to_local(d, outfile):
-    in_rules  = add_rule(local_pub, remote_pub, local_nets, remote_nets, 'out')
-    out_rules = add_rule(remote_pub, local_pub, remote_nets, local_nets, 'in')
 
-    d['local']  = remote_pub
-    d['remote'] = local_pub
-    rules  = prologue % d
-    rules += """
+class bundle:
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
 
-%s
+def grokspec(s, dn):
+    """Grok a IP:nets,... specification"""
 
-
-%s
-
-%s""" % (in_rules, out_rules, epilogue)
-
-    writefile(outfile, rules)
+    i = s.find(':')
+    if i < 0:
+        die("%s specification '%s' doesn't look like IP:subnet", dn, s)
 
 
-if len(sys.argv) < 3:
-    print >>sys.stderr, "Usage: %s remote.conf us.conf" % sys.argv[0]
-    sys.exit(1)
+    ip = s[:i]
+    s  = s[i+1:]
+    return ip, s.split(',')
 
-now  = datetime.datetime.now()
-d = { 'prog': sys.argv[0],
-      'date': "%s" % now,
-      'aespass':  randpass(16),
-      'hmacpass': randpass(20),
-      'remotepub': remote_pub,
-      'uspub': local_pub,
-      'remote_local_spi': remote_local_spi,
-      'local_remote_spi': local_remote_spi,
-    }
 
-# Generate remote and us config in one shot
-remote_to_local(d, sys.argv[1])
-local_to_remote(d, sys.argv[2])
+def main():
+    global __doc__, Epilog
+
+    usage = """%s [options] LOCAL-spec REMOTE-spec""" % Z
+
+    parser = argparse.ArgumentParser(description=__doc__, usage=usage,
+                            epilog=Epilog,
+                            formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("-v", "--verbose", dest='verbose', action="store_true",
+                      default=False,
+                      help="Show verbose progress messages [False]")
+    parser.add_argument("-l", "--local-file", dest='local', default="", metavar='F',
+                        help="Write local config to file 'F' [$LOCAL_IP]")
+    parser.add_argument("-r", "--remote-file", dest='remote', default="", metavar='F',
+                        help="Write remote config to file 'F' [$REMOTE_IP]")
+
+    parser.add_argument("localspec",  nargs=1, metavar="Local-Spec",
+                        help="Local IP and subnet specification")
+    parser.add_argument("remotespec", nargs=1, metavar="Remote-Spec",
+                        help="Remote IP and subnet specification")
+
+    a    = parser.parse_args()
+
+
+    l_pub, l_nets = grokspec(a.localspec[0], "local")
+    r_pub, r_nets = grokspec(a.remotespec[0], "remote")
+
+    lr_e = randhexstr(36)
+    rl_e = randhexstr(36)
+    lr_m = randhexstr(32)
+    rl_m = randhexstr(32)
+
+    lr_spi = "0x%x" % rand32()
+    rl_spi = "0x%x" % rand32()
+
+    now  = datetime.datetime.now()
+    d = { 'prog': sys.argv[0],
+          'date': "%s" % now,
+          'remotepub': r_pub,
+          'localpub': l_pub,
+          'local_remote_spi': lr_spi,
+          'remote_local_spi': rl_spi,
+          'LR_enc': lr_e,
+          'RL_enc': rl_e,
+          'LR_mac': lr_m,
+          'RL_mac': rl_m,
+        }
+
+
+    lf = "%s-%s.conf" % (l_pub, r_pub)
+    rf = "%s-%s.conf" % (r_pub, l_pub)
+
+    if len(a.local) > 0:   lf = a.local
+    if len(a.remote) > 0:  rf = a.remote
+
+
+    if lf == rf:
+        die("Local and Remote config filenames are identical: '%s'", lf)
+
+
+    lr = bundle(A=l_pub, B=r_pub, Anets=l_nets, Bnets=r_nets,
+                AB_spi=lr_spi,
+                BA_spi=rl_spi,
+                AB_ekey=lr_e,
+                BA_ekey=rl_e,
+                AB_mkey=lr_m,
+                BA_mkey=rl_m)
+
+    rl = bundle(A=r_pub, B=l_pub, Anets=r_nets, Bnets=l_nets,
+                AB_spi=rl_spi,
+                BA_spi=lr_spi,
+                AB_ekey=rl_e,
+                BA_ekey=lr_e,
+                AB_mkey=rl_m,
+                BA_mkey=lr_m)
+
+
+
+    # Generate remote and local configs
+    a_to_b(d, lr, lf)
+    a_to_b(d, rl, rf)
+
+
+main()
 
 # EOF

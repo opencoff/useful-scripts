@@ -5,7 +5,6 @@ import os, sys
 import string, itertools
 from optparse import Option, OptionParser, OptionValueError
 
-
 #
 # Simple utility to generate random passwords of arbitrary length
 #
@@ -49,6 +48,16 @@ def gen_words(words, nwords=3):
 
     return ' '.join(v)
 
+def readwords(fname, wlen):
+    fd = open(fname)
+    z  = []
+    for l in fd:
+        l = l.strip()
+        if len(l) > 1 and len(l) <= wlen:
+            z.append(l)
+
+    fd.close()
+    return z
 
 def randcase(w):
     """Turn upto 4 letters into upper case"""
@@ -65,45 +74,33 @@ def randcase(w):
 
 
 # Hermaan Schaaf's clever routine doesn't use a dictionary :-)
+def wordlist(wlen):
+    initial_consonants = (set(string.ascii_lowercase) - set('aeiou')
+                          # remove those easily confused with others
+                          - set('qxc')
+                          # add some crunchy clusters
+                          | set(['bl', 'br', 'cl', 'cr', 'dr', 'fl',
+                                 'fr', 'gl', 'gr', 'pl', 'pr', 'sk',
+                                 'sl', 'sm', 'sn', 'sp', 'st', 'str',
+                                 'sw', 'tr'])
+                          )
 
-initial_consonants = (set(string.ascii_lowercase) - set('aeiou')
-                      # remove those easily confused with others
-                      - set('qxc')
-                      # add some crunchy clusters
-                      | set(['bl', 'br', 'cl', 'cr', 'dr', 'fl',
-                             'fr', 'gl', 'gr', 'pl', 'pr', 'sk',
-                             'sl', 'sm', 'sn', 'sp', 'st', 'str',
-                             'sw', 'tr'])
-                      )
+    final_consonants = (set(string.ascii_lowercase) - set('aeiou')
+                        # confusable
+                        - set('qxcsj')
+                        # crunchy clusters
+                        | set(['ct', 'ft', 'mp', 'nd', 'ng', 'nk', 'nt',
+                               'pt', 'sk', 'sp', 'ss', 'st'])
+                        )
 
-final_consonants = (set(string.ascii_lowercase) - set('aeiou')
-                    # confusable
-                    - set('qxcsj')
-                    # crunchy clusters
-                    | set(['ct', 'ft', 'mp', 'nd', 'ng', 'nk', 'nt',
-                           'pt', 'sk', 'sp', 'ss', 'st'])
-                    )
+    vowels = 'aeiou' # we'll keep this simple
 
-vowels = 'aeiou' # we'll keep this simple
-
-# each syllable is consonant-vowel-consonant "pronounceable"
-syllables = map(''.join, itertools.product(initial_consonants, 
+    # each syllable is consonant-vowel-consonant "pronounceable"
+    z = map(''.join, itertools.product(initial_consonants, 
                                            vowels, 
                                            final_consonants))
+    return [ x for x in z if len(x) > 1 and len(x) <= wlen ]
 
-# you could throw in number combinations, maybe capitalized versions... 
-
-def gibberish(wordcount, wordlist=syllables):
-    return random.sample(wordlist, wordcount)
-
-def human_pass(wordcount=2, separate=False, capital=False):
-    sep = ' ' if separate else ''
-
-    g = gibberish(wordcount)
-    if capital:
-        g = [ x.capitalize() for x in g ]
-
-    return sep.join(g)
 
 
 usage = """%s: Simple utility to generate random passwords.
@@ -111,50 +108,68 @@ usage = """%s: Simple utility to generate random passwords.
 Usage: %s [options] [count]""" % (sys.argv[0], sys.argv[0])
 
 parser = OptionParser(usage)
+parser.add_option("-d", "--dictionary", dest="wordlist", type='string',
+                  default=None, metavar='F',
+                  help="Read a wordlist from file 'F' [%default]")
+
 parser.add_option("-0", "--print0", dest="print0", action="store_true",
                   default=False,
                   help="Use '\\0' as the separator between multiple passwords [%default]")
+
 parser.add_option("-n", "--numeric", dest="numeric_only",
                   action="store_true", default=False,
                   help="Only use Numbers '0-9' [%default]")
+
 parser.add_option("-a", "--alphanumeric", dest="alphanumeric",
                   action="store_true", default=False,
                   help="Only use Alphanumeric chars 'a-zA-Z0-9' [%default]")
+
 parser.add_option("-l", "--length", dest="length", type='int',
                   default=9, metavar='L',
-                  help="Generate passwords of length 'L' [%default]")
+                  help="Limit word or password length to 'L' [%default]")
+
 parser.add_option("-H", "--human-readable", dest="words", action="store_true",
                   default=False,
                   help="Generate human readable passwords [%default]")
+
 parser.add_option("-L", "--lowercase", dest="lowercase", action="store_true",
                   default=False,
                   help="Use lowercase for human readable passwords [%default]")
+
 parser.add_option("-s", "--separate", dest="spaceify", action="store_true",
                   default=False,
                   help="Use whitespace to delineate words in a password [%default]")
+
 parser.add_option("-w", "--words", dest="nwords", type="int", action="store",
                   default=2, metavar="N",
                   help="Generate N words of human readable password [%default]")
+
 parser.add_option("-C", "--capitalize", dest="capitalize", action="store_true",
                   default=False,
                   help="Capitalize first letter of a word [%default]")
 
 opt, args = parser.parse_args()
 
-n = len(args) > 0 and int(args[0]) or 1
+n = int(args[0]) if len(args) > 0 else 1
 
 
 if opt.words:
-    sep = ' ' if opt.spaceify else ''
+    words = readwords(opt.wordlist, opt.length) if opt.wordlist else wordlist(opt.length)
 
-    gen2 = lambda: human_pass(opt.nwords, opt.spaceify, opt.capitalize)
+    def gen0():
+        random.shuffle(words)
+        z = random.sample(words, opt.nwords)
 
-    if opt.alphanumeric:
-        gen3 = lambda: gen2() + sep + randnum(4)
-    else:
-        gen3 = gen2
+        if opt.capitalize:
+            z = [ x.capitalize() for x in z ]
 
-    gen = gen3
+        if opt.alphanumeric:
+            z.append(randnum(4))
+
+        sep = ' ' if opt.spaceify else ''
+        return sep.join(z)
+
+    gen = gen0
 
 elif opt.numeric_only:
     gen = lambda: randnum(opt.length)
@@ -166,10 +181,8 @@ else:
     gen = lambda: randpass(chars, opt.length)
 
 
-if opt.print0:
-    x = '\0'.join([ gen() for a in range(n) ])
-    sys.stdout.write(x)
-else:
-    while n > 0:
-        print gen()
-        n -= 1
+rr = ( gen() for a in range(n) )
+ps = '\0' if opt.print0 else '\n'
+print ps.join(rr)
+
+# EOF

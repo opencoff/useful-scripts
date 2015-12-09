@@ -1,10 +1,6 @@
 #!/bin/sh
 #
 # Creates a disk image (dmg) on Mac OS X from the command line.
-#
-# Sudhi Herle <sudhi-at-herle-net>
-# License: BSD
-#
 # usage:
 #    mkdmg <volname> <vers> <srcdir>
 #
@@ -36,6 +32,7 @@ hdiutil eject $DISK
 hdid "$DMG"
 cp -R "${FILES}"/* "/Volumes/$VOL"
 hdiutil eject $DISK
+#osascript -e "tell application "Finder" to eject disk "$VOL"" && 
 
 # convert to compressed image, delete temp image
 rm -f "${VOL}-${VER}.dmg"

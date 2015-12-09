@@ -214,6 +214,7 @@ class process_list(object):
           'Darwin': Darwin_pslist,
           'darwin': Darwin_pslist,
           'Linux':  Linux_pslist,
+          'linux2':  Linux_pslist,
           'cygwin': cygwin_pslist,
           'CYGWIN_NT-5.1': cygwin_pslist,
          }
@@ -416,7 +417,7 @@ def main(argv):
                 if r > 0:
                     os.kill(p.pid, k)
                 elif r < 0:
-                    sys.exit(1)
+                    sys.exit(0)
         else:
             x = '\n'.join(['kill -%d %7d %s' % (k, z.pid, z.command) for z in v])
             print x

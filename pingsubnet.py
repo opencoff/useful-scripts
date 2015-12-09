@@ -33,7 +33,7 @@
  security reasons.
 """
 
-import sys, os, select
+import sys, os, os.path, select
 import struct, array
 import time, math
 import socket, string
@@ -61,7 +61,7 @@ def die(fmt, *args):
 
 def warn(fmt, *args):
     sfmt = "%s: %s" % (Z, fmt)
-    if args:
+    if len(args) > 0:
         sfmt = sfmt % args
 
     if not sfmt.endswith('\n'):
