@@ -18,7 +18,7 @@ import re, textwrap
 from optparse import OptionParser
 
 Z = os.path.basename(sys.argv[0])
-__version__ = '1.0.2'
+__version__ = '1.0.4'
 
 __doc__ = """
 %s [options] input-file
@@ -291,10 +291,10 @@ class opt_float(opt_type):
                     if (xxptr == optarg)
                     {
                         ++errs;
-                        error(0, 0, "Invalid characters '%%s' for floating point value in option '%(optname)s'", xxptr);
+                        warn("Invalid characters '%%s' for floating point value in option '%(optname)s'", xxptr);
                     }
                     else if (*xxptr)
-                        error(0, 0, "Ignoring trailing characters '%%s' for option '%(optname)s'", xxptr);
+                        warn("Ignoring trailing characters '%%s' for option '%(optname)s'", xxptr);
                     else
                     {
                         opt->%(varname)s = xxdbl;
@@ -1412,13 +1412,12 @@ C_template = """/*
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdarg.h>
 #include <limits.h>
 #include <assert.h>
 #include <errno.h>
 
-
 #include "getopt_long.h"
-#include "error.h"
 
 #include "%(hfile)s"
 
@@ -1431,6 +1430,23 @@ static const struct option Long_options[] =
 static const char Short_options[] = "%(shortopt)s";
 
 %(decls)s
+
+
+/*
+ * Show a warning message.
+ */
+static void
+warn(const char* fmt, ...)
+{
+    va_list ap;
+
+    fflush(stdio);
+    fflush(stderr);
+    va_start(ap, fmt);
+    vfprintf(stderr, fmt, ap);
+    va_end(ap);
+    fflush(stderr);
+}
 
 
 /*
@@ -1577,7 +1593,7 @@ grok_int(const char * str, const char * option, char * present, int * err,
 
     un.ul = strtoul(str, &xxend, 0);
     if (xxend && *xxend)
-        error(0, 0, "Ignoring trailing characters '%%s' for option '%%s'", xxend, option);
+        warn("Ignoring trailing characters '%%s' for option '%%s'", xxend, option);
 
     if (isneg)
     {
@@ -1589,13 +1605,13 @@ grok_int(const char * str, const char * option, char * present, int * err,
         if (isneg && un.l < lim_neg)
         {
             *err += 1;
-            error(0, 0, "Integer value '-%%s' underflow for option '%%s' (min %%ld)",
+            warn("Integer value '-%%s' underflow for option '%%s' (min %%ld)",
                     str, option, lim_neg);
         }
         else if (!isneg && un.ul > (unsigned long)lim_pos)
         {
             *err += 1;
-            error(0, 0, "Integer value '%%s' overflow for option '%%s' (max %%lu)",
+            warn("Integer value '%%s' overflow for option '%%s' (max %%lu)",
                     str, option, lim_pos);
         }
     }
@@ -1672,7 +1688,7 @@ grok_size(const char * str, const char * option, char * present, int * err)
                 break;
             default:
                 errs++;
-                error(0, 0, "Unknown multilplier constant '%%c'  for option '%%s'",
+                warn("Unknown multilplier constant '%%c'  for option '%%s'",
                         *xxend, option);
                 *present = 0;
                 break;
@@ -1683,7 +1699,7 @@ grok_size(const char * str, const char * option, char * present, int * err)
             (xxval < xxbase))
         {
             errs++;
-            error(0, 0, "Size value overflow for option '%%s' (base %%lu, multiplier %%lu)",
+            warn("Size value overflow for option '%%s' (base %%lu, multiplier %%lu)",
                     option, xxbase, xxmult);
             *present = 0;
         }

@@ -1,13 +1,15 @@
 README for mkgetopt
 ===================
 
-mkgetopt.py is a simple Python script to generate command line
-parsing routines that use ``getopt_long()``. It is designed to
-remove the tedium of having to write the same code over and over
-again. 
+mkgetopt.py generates ANSI C command line parsing routines that uses
+``getopt_long()``. It aims to remove the tedium of parsing command
+line options in various programs.
 
-It reads an text file containing descriptions of the command line
-options and generates corresponding .c, and .h files.
+It reads a text file containing descriptions of the command line
+options and generates corresponding .c, and .h files. These
+generated files have no other dependency other than ``getopt_long()``
+and ``libc``.
+
 
 Requirements
 ------------
@@ -25,6 +27,11 @@ Windows:
    - copy the mkgetopt-manual.txt to a directory where you can find
      it in the future (for reference)
 
+If your system doesn't have a functional ``getopt_long()`` - use the
+version provided here. The bundled version of ``getopt_long()`` is
+from NetBSD with minor changes for ANSI-fication, and is distributed
+under the terms described at the top of ``getopt_long.h`` and
+``getopt_long.c``.
 
 Details
 =======
