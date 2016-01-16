@@ -48,6 +48,10 @@ identified with a suffix of ``*``. ::
     finddup         *  If you have identical files strewn around in your file system
     hexlify         *  hexlificate your stdin
 
+    pardu.py        *  Parallel, pure-python version of du. Possibly
+                       faster than the native version on your machine. 
+                       alias du=pardu.py is the recommended way.
+
     kill.py         *  Cross platform, interactive way to kill processes by name/PID
                        alias kill=kill.py  works very nicely.
                        'q' in the prompt cleanly exits the tool.
@@ -124,8 +128,5 @@ emulators. And, I wanted a way to disable CapsLock permanently. I figured out th
 happen. I haven't tested in on a more recent Windows 7/8/10. If you find this useful, drop me a
 note.
 
-
-
 --
-
 Sudhi
