@@ -8,11 +8,11 @@
 # GPLv2
 #
 
-import os, sys, os.path
-import re, zlib, mmap
+import os, sys,  os.path
+import re, zlib, mmap, signal
+import multiprocessing as m
 from os.path  import basename, dirname, join, isfile, isdir
 from optparse import Option, OptionParser, OptionValueError
-import multiprocessing as m
 
 try:
     import hashlib
@@ -58,6 +58,14 @@ Ignore_re = ('\.svn',
              )
 Ignore_re_list = map(lambda x: re.compile(x), Ignore_re)
 
+
+def block_sigs():
+    """Block signals in the worker process"""
+    signal.signal(signal.SIGINT,  signal.SIG_IGN)
+    signal.signal(signal.SIGPIPE, signal.SIG_IGN)
+    signal.signal(signal.SIGHUP,  signal.SIG_IGN)
+
+
 def ignore(name):
     """Return True if this pat must be ignored, false otherwise"""
     global Ignore_re_list
@@ -75,7 +83,7 @@ class bundle:
 class cksum_db:
     def __init__(self, cksum):
         self.w   = {}
-        self.m   = m.Pool(processes=None)
+        self.m   = m.Pool(processes=None, initializer=block_sigs)
         self.cksum = cksum
 
     def addfile(self, fn):
@@ -206,6 +214,16 @@ class plain:
     def finish(self):
         print "\n%s total wasted space" % human(self.tot)
 
+
+
+def sighandler(a, b):
+    #warn("** Keyboard interrupt. Exiting ..")
+    sys.exit(1)
+
+
+
+# startoff by installing signal handlers
+signal.signal(signal.SIGINT, sighandler)
 
 # We detect dups in two stages.
 # In the first stage, we use a quick checksum to coarsely distinguish

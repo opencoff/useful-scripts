@@ -297,7 +297,7 @@ class cipher:
         outfd.write(dbuf)
 
 
-def filemode(a):
+def regfile(a):
     """Return if st_mode info in 'a' points to a file or file like filesystem
     object"""
 
@@ -307,6 +307,7 @@ def samefile(a, b):
     """Return True if a and b are the same file and dirname(a) is writable.
 
     Return False otherwise."""
+
     if not a: return False
     if not b: return False
 
@@ -320,15 +321,15 @@ def samefile(a, b):
     except:
         return False
 
-    if not filemode(sta.st_mode):
+    if not regfile(sta.st_mode):
         die("%s is not a file like entry?", a)
 
-    if not filemode(sta.st_mode):
+    if not regfile(stb.st_mode):
         die("%s is not a file like entry?", b)
 
-    if sta.st_ino != stb.st_ino: return False
-    if sta.st_dev != stb.st_dev:   return False
-    if sta.st_rdev!= stb.st_rdev:  return False
+    if sta.st_ino  != stb.st_ino:   return False
+    if sta.st_dev  != stb.st_dev:   return False
+    if sta.st_rdev != stb.st_rdev:  return False
 
     # Now, make sure the parent dir of 'a' is writable.
     adir = dirname(a)
