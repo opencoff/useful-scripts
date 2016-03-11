@@ -91,8 +91,8 @@ to launchd control.::
     osx-ipfw.sh       Enable ipfw(8) with a default set of secure rules
     osx-noatime.sh    Enable noatime mounts on all disks
     osx-ramfs.sh      Put /tmp and /var/run under a RAMFS
-    osx-randmac.sh    Randomize your MAC address at every boot. Designed to auto-detect your wifi
-                      interface and use it with that.
+    osx-randmac.sh    Randomize your MAC address every day. Designed to auto-detect your wifi
+                      interface. Run it without any args to see usage.
     osx-tuntap.sh     Make your tun-tap driver persistent.
 
 
