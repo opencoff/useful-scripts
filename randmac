@@ -1,31 +1,85 @@
-#! /usr/bin/env ksh
-
-# Generate a semi-random MAC address
+#! /usr/bin/env python
 #
-# (c) 2014, 2015 Sudhi Herle <sudhi-at-herle-net>
-# License: Public Domain
-
-# Generate a random mac address
-_randmac() {
-
-    # These are VMware, Xen and Parallels OUIs
-    set -A vendors "00:05:69" "00:0c:29" "00:1c:14" "00:50:56" \
-                   "00:1c:42" "00:16:3e"
-    typeset n=${#vendors[@]}
-
-    set -A rand -- $(dd if=/dev/urandom bs=4 count=1 2>/dev/null| od -t xC)
-
-    # rand[0] and rand[5] are offsets; we can ignore them.
-    typeset a1=${rand[1]}
-    typeset a2=${rand[2]}
-    typeset a3=${rand[3]}
-    typeset a4=$(( 0 + 0x${rand[4]} ))   # We want this to be an integer
-
-    # pick a random prefix from the list
-    typeset pref=${vendors[$a4 % $n]}
-
-    echo "$pref:$a1:$a2:$a3"
-}
+# Generate a random, valid MAC address
+#
+import random, binascii
+import os, sys
+import string, re
+from optparse import Option, OptionParser, OptionValueError
+from binascii import hexlify
 
 
-_randmac
+Mfgprefix = [
+    ('000569', 'VMWare'),
+    ('000C29', 'VMWare'),
+    ('001c14', 'VMWare'),
+    ('005056', 'VMWare'),
+    ('001c42', 'Parallels'),
+    ('00163e', 'Xensource'),
+    ]
+
+
+def randhex(n=6):
+    z = os.urandom(3)
+    return "%02x:%02x:%02x" % (ord(z[0]), ord(z[1]), ord(z[2]))
+
+
+
+def read_oui(fn):
+
+    fd = open(fn, 'rb')
+    
+    pat = re.compile(r'^\s*([0-9A-F]{2}-[0-9A-F]{2}-[0-9A-F]{2})\s+\(hex\)\s+(.*)$', re.I)
+    db = []
+    for l in fd:
+        if len(l) == 0:
+            continue
+
+        m = pat.match(l)
+        if m is not None:
+            pref = m.group(1)
+            comp = m.group(2).strip()
+            p  = pref.replace('-','')
+            t  = (p, comp)
+            db.append(t)
+            #print "%s -- %s" % (p, comp)
+        
+
+    fd.close()
+    return db
+
+
+usage = """%s: Generate valid, Random Ethernet MAC address
+
+Usage: %s [options]""" % (sys.argv[0], sys.argv[0])
+
+parser = OptionParser(usage)
+parser.add_option("", "--oui", dest="oui", type="string",
+                  default=None, metavar='F',
+                  help="Read the IEEE OUI database from file 'F' [%default]")
+parser.add_option("-v", "--verbose", dest="verbose",
+                  action="store_true", default=False,
+                  help="Show verbose output [%default]")
+
+opt, args = parser.parse_args()
+
+if opt.oui is not None:
+    db = read_oui(opt.oui)
+else:
+    db = Mfgprefix
+    random.shuffle(db)
+    
+
+
+random.shuffle(db)
+t = random.sample(db, 1)[0]
+p = t[0]
+pref = "%s:%s:%s" % (p[0:2], p[2:4], p[4:])
+mac  = "%s:%s" % (pref.lower(), randhex())
+
+if opt.verbose:
+    print "%s  - %s" % (mac, t[1])
+else:
+    print mac
+
+# EOF

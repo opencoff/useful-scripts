@@ -20,6 +20,25 @@
 # This should work on all the BSDs and OS X. But, I haven't tried it
 # on any of them.
 
+PATH=/sbin:/usr/sbin:/bin:/usr/bin:/usr/local/bin
+export PATH
+
+# Other OUIs:
+# D-Link 1c:af:f7
+# HTC    1c:b0:94 38:e7:d8 64:a7:69 7c:61:93 84:7a:88
+
+_rand4() {
+    typeset x=$(dd if=/dev/urandom bs=64 count=1 2>/dev/null | md5sum)
+    echo ${x:0:2} ${x:2:2} ${x:4:2} ${x:6:2}
+    return 0
+}
+
+_hexrand() {
+    typeset rr=$(hexdump -e '32/1 "%02x " "\n"' -n 8 /dev/urandom)
+    echo $rr
+    return 0
+}
+
 # Generate a random mac address
 _randmac() {
     # These are VMware, Xen and Parallels OUIs
@@ -27,13 +46,14 @@ _randmac() {
                    "00:1c:42" "00:16:3e"
     typeset n=${#vendors[@]}
 
-    set -A rand -- $(dd if=/dev/urandom bs=4 count=1 2>/dev/null| od -t xC)
+    typeset rr=$(_rand4)
 
-    # rand[0] and rand[5] are offsets; we can ignore them.
-    typeset a1=${rand[1]}
-    typeset a2=${rand[2]}
-    typeset a3=${rand[3]}
-    typeset a4=$(( 0 + 0x${rand[4]} ))   # We want this to be an integer
+    set -A rand -- $rr
+
+    typeset a1=${rand[0]}
+    typeset a2=${rand[1]}
+    typeset a3=${rand[2]}
+    typeset a4=$(( 0 + 0x${rand[3]} ))   # We want this to be an integer
 
     # pick a random prefix from the list
     typeset pref=${vendors[$a4 % $n]}
@@ -55,4 +75,4 @@ if [ $me != 0 ]; then
     e=echo
 fi
 
-$e ifconfig $iface ether $(_randmac)
+$e ifconfig $iface lladdr $(_randmac)

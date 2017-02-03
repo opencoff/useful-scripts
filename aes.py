@@ -1,7 +1,10 @@
 #! /usr/bin/env python
 #
 #
-# Portable file encrypt/decrypt using AES
+# Portable file encrypt/decrypt using AES.
+# Tested on:
+#  - Python 2.7
+#  - Python 3.4
 # 
 # (c) 2012 Sudhi Herle <sw at herle.net>
 # License: GPLv2
@@ -32,21 +35,29 @@
 
 import os, sys, stat, string
 import argparse, random, getpass
-import binascii, struct
+import struct
+import string
 
-from stat                 import S_ISREG, S_IFIFO, S_IFSOCK, S_IWUSR
+from binascii             import hexlify
+from stat                 import S_ISREG, S_ISFIFO, S_ISSOCK, S_IWUSR, S_ISCHR
 from struct               import pack, unpack
 from os.path              import dirname, abspath, normpath
 from Crypto.Cipher        import AES, Blowfish
 from Crypto.Hash          import SHA256, SHA512, HMAC
 from Crypto.Util          import Counter
 from Crypto.Protocol.KDF  import PBKDF2
-from Crypto.Random.random import StrongRandom
+
+PY3K    = sys.version_info >= (3, 0)
+CHARSET = list('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789')
+
+# Program version
+# Increment with every change.
+VERSION = '%(prog)s - 0.9'
 
 
 # -- Parameters that are tunable --
 
-SALTLEN    = 16
+SALTLEN    = 32
 KEYLEN     = 32     # AES-256
 BUF_SIZE   = 65536  # I/O Bufsize
 
@@ -67,11 +78,9 @@ PBKDF2_id = 0x0
 
 # Fixed length header: ENCALGO, HASHALGO, KDFALGO, KEYLEN, SALTLEN, KEY_ROUNDS
 F_HDRFMT   = "> B B B x H H I"
-F_HDRLEN   = 2 + 2 + 4
 
 # Variable length header: SALT1, SALT2
 V_HDRFMT   = "> %ds %ds" % (SALTLEN, SALTLEN)
-V_HDRLEN   = SALTLEN + SALTLEN
 
 # --- --- ---
 
@@ -95,21 +104,19 @@ def randbytes(n):
     """Get a random string of n bytes length"""
     return os.urandom(n)
 
-
-charset = list(string.letters + string.digits)
 def randchars(n):
     """Get a random string of n printable chars"""
-    global charset
+    global CHARSET
 
-    random.shuffle(charset)
-    x = random.sample(charset, n)
+    random.shuffle(CHARSET)
+    x = random.sample(CHARSET, n)
 
     return ''.join(x)
 
 def dump(fmt, *args):
     """Dump one or more variables containing binary data"""
     if args:
-        v = ( binascii.hexlify(a) for a in args )
+        v = ( hexlify(a) for a in args )
         x = fmt % tuple(v)
     else:
         x = fmt
@@ -122,30 +129,52 @@ def dump(fmt, *args):
 
 def hashem(pw):
     """hash the password once; expands shorter passwords"""
-    h = SHA512.new()
+    h  = SHA512.new()
+    lb = pack("> I", len(pw))
+    h.update(lb)
     h.update(pw)
     return h.digest()
 
-
-def get_pass(env=None):
+def get_pass(env=None, tries=1):
     """Read password from console or environment var"""
+    global PY3K
+
+    if PY3K:
+        pwenc = lambda x: x.encode('utf-8')
+    else:
+        pwenc = lambda x: x
 
     if env:
-        return hashem(os.environ.get(env, None))
+        pw = os.environ.get(env, None)
+        if not pw:
+            die("Environment var %s is empty?", pw)
+
+        return hashem(pwenc(pw))
+
+    if tries == 1:
+        pw = getpass.getpass("Enter password: ", sys.stderr)
+        return hashem(pwenc(pw))
 
     n = 0
     while True:
-        n += 1
+        n  += 1
         pw1 = getpass.getpass("Enter password: ", sys.stderr)
         pw2 = getpass.getpass("Re-enter password: ", sys.stderr)
         if pw1 == pw2:
-            return hashem(pw1)
+            return hashem(pwenc(pw1))
 
-        if n > 3:
-            print >>sys.stderr, "Too many mistakes. Bye!"
-            sys.exit(1)
+        if n < 3:
+            warn("Passwords don't match. Try again..")
         else:
-            print >>sys.stderr, "Passwords don't match. Try again.."
+            die("Too many mistakes. Bye!")
+
+
+def kdfprf(p, s):
+    """Pseudo-random-function used by PBKDF2. We use HMAC-SHA512."""
+
+    h0 = HMAC.new(p, digestmod=SHA512)
+    h0.update(s)
+    return h0.digest()
 
 
 class cipher:
@@ -167,6 +196,8 @@ class cipher:
         self.keylen  = keylen
         self.saltlen = saltlen
         self.rounds  = rounds
+        self.infd    = None
+        self.outfd   = None
 
 
     def makekeys(self, pw, salt1=None, salt2=None):
@@ -175,16 +206,20 @@ class cipher:
         s1  = salt1 if salt1 else randbytes(self.saltlen)
         s2  = salt2 if salt2 else randbytes(self.saltlen)
 
-        k1  = self.kdf(pw, s1, self.keylen, self.rounds)
-        k2  = self.kdf(pw, s2, self.keylen, self.rounds)
+        k1  = self.kdf(pw, s1, self.keylen, self.rounds, kdfprf)
+        k2  = self.kdf(pw, s2, self.keylen, self.rounds, kdfprf)
         vf  = "> %ds %ds" % (self.saltlen, self.saltlen)
         h1  = pack(F_HDRFMT, 0x0, 0x0, 0x0, self.keylen, self.saltlen, self.rounds)
         h2  = pack(vf, s1, s2)
 
-        ctr = Counter.new(8 * blksize)
+        # initial counter is derived from the salts above.
+        iv0 = hashem(s1 + s2)[:16]
+        iv  = int(hexlify(iv0), 16)
 
-        self.H  = HMAC.new(k1, digestmod=self.shash)
-        self.C  = self.cipher.new(k2, self.cipher.MODE_CTR, counter=ctr)
+        ctr = Counter.new(8 * blksize, initial_value=iv)
+
+        self.H   = HMAC.new(k1, digestmod=self.shash)
+        self.C   = self.cipher.new(k2, self.cipher.MODE_CTR, counter=ctr)
         self.hdr = h1 + h2
 
 
@@ -195,7 +230,7 @@ class cipher:
 
         hdr = infd.read(12) # fixed size header
         if len(hdr) < 12:
-            raise Exception("Header incomplete, expected at least 12 bytes, saw %d bytes" % len(hdr))
+            die("Header incomplete, expected at least 12 bytes, saw %d bytes" % len(hdr))
 
         vv  = unpack(F_HDRFMT, hdr)
         ea  = vv[0]
@@ -203,7 +238,7 @@ class cipher:
         ka  = vv[2]
 
         if ea != 0 or ha != 0 or ka != 0:
-            raise Exception("Unsupported algorithms in the header")
+            die("Unsupported algorithms in the header")
 
         kl  = vv[3]
         sl  = vv[4]
@@ -214,7 +249,7 @@ class cipher:
         sln  = sl + sl
         hdr  = infd.read(sln)
         if len(hdr) < sln:
-            raise Exception("Header incomplete, expected %d bytes, saw %d bytes" % (sln, len(hdr)))
+            die("Header incomplete, expected %d bytes, saw %d bytes" % (sln, len(hdr)))
 
         vf  = "> %ds %ds" % (sl, sl)
         vv  = unpack(vf, hdr)
@@ -226,6 +261,7 @@ class cipher:
         lb  = pack(">I", len(hdr))
         cf.H.update(lb)
         cf.H.update(hdr)
+        cf.infd = infd
 
         return cf
 
@@ -238,12 +274,14 @@ class cipher:
         self.H.update(lb)
         self.H.update(self.hdr)
         outfd.write(self.hdr)
+        self.outfd = outfd
 
 
-    def enc(self, infd, outfd):
+    def enc(self, infd):
         """Encrypt by reading the input fd and writing to outfd"""
 
-        n = 0L
+        n = 0
+        outfd = self.outfd
         while True:
             buf = infd.read(BUF_SIZE)
             if not buf:
@@ -259,10 +297,11 @@ class cipher:
         outfd.write(self.H.digest())
 
 
-    def dec(self, infd, outfd):
+    def dec(self, outfd):
         """Decrypt by reading the input and writing to outfd"""
 
-        n    = 0L
+        n    = 0
+        infd = self.infd
         prev = infd.read(BUF_SIZE)
         while len(prev) == BUF_SIZE:
             buf = infd.read(BUF_SIZE)
@@ -278,7 +317,7 @@ class cipher:
 
         # Last block has the mac. Remove it before decrypting the rest of the content
         if len(prev) < MACSIZE:
-            raise Exception("File corrupt? Last block too small (%d bytes)" % len(prev))
+            die("File corrupt? Last block too small (%d bytes)" % len(prev))
 
         file_mac = prev[-MACSIZE:]
         ebuf     = prev[:-MACSIZE]
@@ -291,7 +330,7 @@ class cipher:
         mac  = self.H.digest()
 
         if file_mac != mac:
-            raise Exception("File corrupt? MAC mismatch")
+            die("File corrupt? MAC mismatch")
 
         dbuf = self.C.decrypt(ebuf)
         outfd.write(dbuf)
@@ -301,7 +340,7 @@ def regfile(a):
     """Return if st_mode info in 'a' points to a file or file like filesystem
     object"""
 
-    return S_ISREG(a) or S_IFIFO(a) or S_IFSOCK(a)
+    return S_ISREG(a) or S_ISFIFO(a) or S_ISSOCK(a) or S_ISCHR(a)
 
 def samefile(a, b):
     """Return True if a and b are the same file and dirname(a) is writable.
@@ -313,9 +352,10 @@ def samefile(a, b):
 
     try:
         sta = os.stat(a)
-    except Exception, ex:
+    except Exception as ex:
         die("%s: %s", a, str(ex))
 
+    # It is NOT an error for the output file to NOT exist!
     try:
         stb = os.stat(b)
     except:
@@ -339,7 +379,14 @@ def samefile(a, b):
 
     return True
 
+def openif(nm, fd, mod):
+    """Open 'nm' if non-null else, fdopen 'fd'"""
+
+    return open(nm, mod, BUF_SIZE) if nm else os.fdopen(fd.fileno(), mod)
+
 def main():
+    global VERSION 
+
     ap = argparse.ArgumentParser(description="""Portable encryption/decryption of file.
             Encryption uses AES-256. The user supplied passphrase is used to
             derive encryption and HMAC keys using the PBKDF2 function. Encrypted data is
@@ -354,6 +401,8 @@ def main():
                     help="Write output to file 'F' [Stdout]")
     ap.add_argument("-k", "--env-pass", type=str, default=None, metavar='E',
                     help="Read password from environment variable 'E' []")
+    ap.add_argument('-V', "--version", action='version', version=VERSION)
+
 
     g = ap.add_mutually_exclusive_group()
     g.add_argument("-e", "--encrypt", action="store_true",
@@ -367,12 +416,10 @@ def main():
 
     args = ap.parse_args()
 
-    pwd = get_pass(args.env_pass)
+    # Don't ask for password twice if we are decrypting.
+    pwd = get_pass(args.env_pass, tries=2 if args.encrypt else 1)
 
     #print "PASS=%s ENV=%s" % (pwd, args.env_pass)
-
-    infd  = sys.stdin
-    outfd = sys.stdout
 
     # Verify for in place operation
     inplace = False
@@ -381,48 +428,40 @@ def main():
         args.infile = abspath(normpath(args.infile))
         args.output = args.infile + randchars(8)
 
-    if args.infile:
-        infd = open(args.infile, 'rb', BUF_SIZE)
 
-    if args.output:
-        outfd = open(args.output, 'wb', BUF_SIZE)
+    infd  = openif(args.infile, sys.stdin,  'rb')
+    outfd = openif(args.output, sys.stdout, 'wb')
 
     if args.encrypt:
-        cf  = cipher('AES', 'SHA256', 'PBKDF2', KEYLEN, SALTLEN, KEY_ROUNDS)
+        cf = cipher('AES', 'SHA256', 'PBKDF2', KEYLEN, SALTLEN, KEY_ROUNDS)
         cf.encbegin(pwd, outfd)
-        cf.enc(infd, outfd)
+        cf.enc(infd)
     else:
         cf = cipher.decbegin(infd, pwd)
-        cf.dec(infd, outfd)
+        cf.dec(outfd)
+
+    outfd.close()
+    infd.close()
 
     if inplace:
-        outfd.close()
-        infd.close()
-
         tmp = args.infile + randchars(8)
 
         # Save the orig file temporarily
         try:
             os.rename(args.infile, tmp)
-        except:
+        except Exception as ex:
             os.unlink(args.output)
-            die("Operation failed; Unable to create temporary restore point")
+            die("Operation failed; Unable to create temporary restore point\n\t%s", str(ex))
 
         try:
             os.rename(args.output, args.infile)
-        except:
+        except Exception as ex:
             os.rename(tmp, args.infile)
             os.unlink(args.output)
-            die("Operation failed; unable to rename transformed file back to original")
+            die("Operation failed; unable to rename transformed file back to original\n\t%s", str(ex))
         else:
             os.unlink(tmp)
 
-    else:
-        if args.infile:
-            infd.close()
-
-        if args.output:
-            outfd.close()
 
 
 main()

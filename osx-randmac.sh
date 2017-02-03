@@ -45,7 +45,7 @@ function die {
 
 
 if [ $Me -ne 0 ]; then
-    echo "$Z: Need root privilege to install system-wide; switching to dry-run mode .."
+    echo "$Z: Need root privilege to run; switching to dry-run mode .."
     Installdir=/tmp/LaunchAgents
     Bindir=/tmp/bin
     e=echo
@@ -90,7 +90,7 @@ test -n "$action" || usage
 shift
 
 function writelog {
-    $e logger -p "daemon.info" -t "${FNAME}" "$@"
+    $e logger -p "daemon.notice" -t "${FNAME}" "$@"
 }
 
 
@@ -220,7 +220,7 @@ function update_mac {
 
     $e $net -detectnewhardware
 
-    $e writelog "$iface: MAC updated to $mac"
+    writelog "$iface: MAC updated to $mac"
 
     return 0
 }
@@ -312,10 +312,11 @@ fi
 case $action in
     start|update)
         if [ $Me -ne 0 ]; then
-            die "Need root privileges to set/update MAC address"
+            #die "Need root privileges to set/update MAC address"
+            true
         fi
 
-        $e ifconfig $iface down
+        writelog "$iface: Updating MAC Address .."
         update_mac $iface
         ;;
 

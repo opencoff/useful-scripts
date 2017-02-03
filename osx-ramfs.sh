@@ -17,14 +17,14 @@
 #   - '$0 install' will turn this into a LaunchDaemon
 #
 
-set -x
+#set -x
 
 PATH=/sbin:/usr/sbin:/bin:/usr/bin:$PATH
 export PATH
 
 # >>>  Tunables <<<
 # size of /tmp in MB
-TMP_SIZE=768
+TMP_SIZE=1024
 
 # size of /var/run in MB
 VAR_RUN_SIZE=8

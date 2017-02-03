@@ -9,9 +9,10 @@
 #
 
 import os, sys
-from os.path import basename, dirname, abspath, normpath, join
-from binascii import hexlify
-from optparse import Option, OptionParser, OptionValueError
+from os.path   import basename, dirname, abspath, normpath, join
+from binascii  import hexlify
+from optparse  import Option, OptionParser, OptionValueError
+from functools import partial
 
 Z = basename(sys.argv[0])
 
@@ -21,61 +22,53 @@ def die(fmt, *args):
 
 def warn(fmt, *args):
     sfmt = "%s: %s" % (Z, fmt)
-    if args:
-        sfmt = sfmt % args
+    if args: sfmt = sfmt % args
 
-    if not sfmt.endswith('\n'):
-        sfmt += '\n'
+    if not sfmt.endswith('\n'): sfmt += '\n'
 
     sys.stdout.flush()
     sys.stderr.write(sfmt)
     sys.stderr.flush()
 
-def chunkify(outfd, b, n):
-    z = len(b)
-    while z > 0:
-        r = n if z > n else z
+def chexlify(b):
+    """like binascii.hexlify() except writes C like bytes"""
+    return ', '.join(["%#2.2x" % ord(x) for x in b])
 
-        c  = b[:r]
-        b  = b[r:]
-        z -= r
-        
-        outfd.write(hexlify(c)+'\n')
+def hexlate(infd, outfd, N, L, hexer, pref, suff, lf):
+    """Transcribe bytes from 'infd' to 'outfd' in hex. Breakup lines
+    into 'L' bytes. If 'N' is specified, read exactly 'N' bytes from
+    'infd', else read until EOF.
+    """
 
-def hexlate(infd, outfd, N, L):
+    outfd.write(pref)
     
-    # always deal with whole chars
-
     # We provide one of two definitions for the closure pp()
-    if L <= 0:
+    if L < 2:
         def pp(b):
-            outfd.write(hexlify(b))
+            outfd.write(hexer(b))
     else:
-
-        n = L / 2
+        l = L / 2
         def pp(b):
             z = len(b)
             while z > 0:
-                r = n if z > n else z
-
+                r  = l if z > l else z
                 c  = b[:r]
                 b  = b[r:]
                 z -= r
-                
-                outfd.write(hexlify(c)+'\n')
+
+                outfd.write(hexer(c)+lf)
 
     if N > 0:
         b = infd.read(N)
-        if b:
-            pp(b)
+        if b: pp(b)
 
     else:
         while True:
             b = infd.read(65536)
-            if not b:
-                break
+            if not b: break
             pp(b)
 
+    outfd.write(suff)
 
 
 
@@ -87,12 +80,14 @@ multiple output lines.
 """ % { 'Z': Z }
 
 pp = OptionParser(usage=usage)
-pp.add_option('-l', '--line-length', dest="linelen", action="store",
+pp.add_option('-L', '--line-length', dest="linelen", action="store",
               default=0, type="int", metavar="N",
               help="Break output line into 'N' character chunks [%default]")
-pp.add_option('-N', '--Nbytes', dest="N", action="store",
+pp.add_option('-n', '--Nbytes', dest="N", action="store",
               default=0, type="int", metavar="N",
               help="Only read N bytes of input data (0 implies until EOF) [%default]")
+pp.add_option('-c', '--c-type', dest="ctype", action="store_true", default=False,
+              help="Generate a C like array definition [%default]")
 
 opt, args = pp.parse_args()
 
@@ -105,18 +100,23 @@ if len(args) > 1:
     except Exception, ex:
         die("Can't create output file '%s': %s", outf, ex)
 
+barehex = partial(hexlate, N=opt.N, L=opt.linelen, hexer=hexlify, pref='',    suff='\n', lf="\n")
+chex    = partial(hexlate, N=opt.N, L=opt.linelen, hexer=chexlify, pref="{\n", suff="}\n", lf=",\n")
+
+hexify = chex if opt.ctype else barehex
+
 if len(args) > 0:
     for fn in args:
         try:
-            infd = open(fn, 'r')
+            infd = open(fn, 'rb')
         except Exception, ex:
             warn("Can't read file '%s': %s", fn, ex)
             continue
 
-        hexlate(infd, out, opt.N, opt.linelen)
+        hexify(infd, out)
         infd.close()
 
 else:
-    hexlate(sys.stdin, out, opt.N, opt.linelen)
+    hexify(sys.stdin, out)
 
 # EOF
