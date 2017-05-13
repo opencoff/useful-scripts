@@ -8,7 +8,7 @@
 # License: GPLv2
 #
 
-import os, sys
+import os, sys, base64
 from os.path   import basename, dirname, abspath, normpath, join
 from binascii  import hexlify
 from optparse  import Option, OptionParser, OptionValueError
@@ -34,7 +34,7 @@ def chexlify(b):
     """like binascii.hexlify() except writes C like bytes"""
     return ', '.join(["%#2.2x" % ord(x) for x in b])
 
-def hexlate(infd, outfd, N, L, hexer, pref, suff, lf):
+def hexlate(infd, outfd, b64, N, L, hexer, pref, suff, lf):
     """Transcribe bytes from 'infd' to 'outfd' in hex. Breakup lines
     into 'L' bytes. If 'N' is specified, read exactly 'N' bytes from
     'infd', else read until EOF.
@@ -58,15 +58,17 @@ def hexlate(infd, outfd, N, L, hexer, pref, suff, lf):
 
                 outfd.write(hexer(c)+lf)
 
+    inxform = base64.b64decode if b64 else lambda x: x
+
     if N > 0:
         b = infd.read(N)
-        if b: pp(b)
+        if b: pp(inxform(b))
 
     else:
         while True:
             b = infd.read(65536)
             if not b: break
-            pp(b)
+            pp(inxform(b))
 
     outfd.write(suff)
 
@@ -86,6 +88,8 @@ pp.add_option('-L', '--line-length', dest="linelen", action="store",
 pp.add_option('-n', '--Nbytes', dest="N", action="store",
               default=0, type="int", metavar="N",
               help="Only read N bytes of input data (0 implies until EOF) [%default]")
+pp.add_option('-b', '--base64', dest='b64', action="store_true", default=False,
+              help="Base64 decode the input first [%default]")
 pp.add_option('-c', '--c-type', dest="ctype", action="store_true", default=False,
               help="Generate a C like array definition [%default]")
 
@@ -113,10 +117,10 @@ if len(args) > 0:
             warn("Can't read file '%s': %s", fn, ex)
             continue
 
-        hexify(infd, out)
+        hexify(infd, out, opt.b64)
         infd.close()
 
 else:
-    hexify(sys.stdin, out)
+    hexify(sys.stdin, out, opt.b64)
 
 # EOF

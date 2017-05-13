@@ -1,25 +1,26 @@
 #! /usr/bin/env python
 #
-#
 # Portable file encrypt/decrypt using AES.
 # Tested on:
 #  - Python 2.7
 #  - Python 3.4
-# 
+#
 # (c) 2012 Sudhi Herle <sw at herle.net>
 # License: GPLv2
 #
 # Notes:
 #  - Does not seek the input or output streams. Thus, this script can
 #    be used in a traditional pipe e.g.,
-#      tar cf - somedir otherdir | gzip -9 | PW=foo encrypt.py -e -k PW -o backup.tar.gz.e
+#      tar cf - somedir otherdir | gzip -9 | PW=foo aes.py -k PW -o backup.tar.gz.e encrypt
 #  - Handles in-place encryption/decryption - i.e., if same file name is used as
 #    the output file, the program does the "right thing"
-#
+#  - AES in CTR mode; HMAC-SHA256 for integrity protection
+#  - Encrypt-then-hash
 #  - Uses PBKDF2 to derive two keys (one for hmac and one for cipher)
-#  - AES in CTR mode
-#  - Calc HMAC of encrypted bytes on the fly
-#  - Salts, keylen, KDF rounds written as header (using struct.pack)
+#  - Single random salt used for KDF
+#  - A password verifier calculated as SHA256 of KDF output; this is used to
+#    verify correct password at decryption time.
+#  - Verifier, salts, algo choice, KDF params are written as header (struct.pack)
 #  - HMAC written as trailer of encrypted stream
 #  - Important information is captured in the header of the encrypted stream.
 #    Thus, as long as header format stays same, future versions of the program
@@ -63,10 +64,10 @@ BUF_SIZE   = 65536  # I/O Bufsize
 
 KEY_ROUNDS = 10000  # PBKDF2 rounds.
 CIPHER     = AES
-MAC        = SHA256
+HASH       = SHA256
 
 BLKSIZE    = CIPHER.block_size
-MACSIZE    = MAC.digest_size
+HASHSIZE   = HASH.digest_size
 
 
 # Fixed identifiers for now
@@ -76,20 +77,15 @@ PBKDF2_id = 0x0
 
 
 
-# Fixed length header: ENCALGO, HASHALGO, KDFALGO, KEYLEN, SALTLEN, KEY_ROUNDS
-F_HDRFMT   = "> B B B x H H I"
-
-# Variable length header: SALT1, SALT2
-V_HDRFMT   = "> %ds %ds" % (SALTLEN, SALTLEN)
+# Fixed length header:
+#    ENCALGO, HASHALGO, KDFALGO, KEYLEN, SALTLEN, KEY_ROUNDS, BUF_SIZE
+F_HDRFMT   = "> B B B x H H I I"
+F_HDRSZ    = struct.calcsize(F_HDRFMT)
 
 # --- --- ---
 
 def warn(fmt, *args):
-    if args:
-        sf = fmt % args
-    else:
-        sf = fmt
-
+    sf = fmt % args if args else fmt
     if not sf.endswith('\n'):
         sf += '\n'
 
@@ -99,6 +95,17 @@ def warn(fmt, *args):
 def die(fmt, *args):
     warn(fmt, *args)
     sys.exit(1)
+
+
+def equal(a,b):
+    """Constant time equals for iterables"""
+    if len(a) != len(b): return False
+
+    v = 0
+    for x, y in zip(a,b):
+        v |= ord(x) ^ ord(y)
+
+    return True if v == 0 else False
 
 def randbytes(n):
     """Get a random string of n bytes length"""
@@ -127,7 +134,17 @@ def dump(fmt, *args):
     sys.stderr.write(x)
     sys.stderr.flush()
 
-def hashem(pw):
+def hashbytes(*a):
+    """Hash a and return SHA256"""
+    h = HASH.new()
+    for x in a:
+        lb = pack("> I", len(x))
+        h.update(lb)
+        h.update(x)
+
+    return h.digest()
+
+def sha512(pw):
     """hash the password once; expands shorter passwords"""
     h  = SHA512.new()
     lb = pack("> I", len(pw))
@@ -149,24 +166,22 @@ def get_pass(env=None, tries=1):
         if not pw:
             die("Environment var %s is empty?", pw)
 
-        return hashem(pwenc(pw))
+        return sha512(pwenc(pw))
 
     if tries == 1:
         pw = getpass.getpass("Enter password: ", sys.stderr)
-        return hashem(pwenc(pw))
+        return sha512(pwenc(pw))
 
-    n = 0
-    while True:
-        n  += 1
-        pw1 = getpass.getpass("Enter password: ", sys.stderr)
-        pw2 = getpass.getpass("Re-enter password: ", sys.stderr)
+    while tries > 0:
+        tries -= 1
+        pw1    = getpass.getpass("Enter password: ", sys.stderr)
+        pw2    = getpass.getpass("Re-enter password: ", sys.stderr)
         if pw1 == pw2:
-            return hashem(pwenc(pw1))
+            return sha512(pwenc(pw1))
 
-        if n < 3:
-            warn("Passwords don't match. Try again..")
-        else:
-            die("Too many mistakes. Bye!")
+        warn("Passwords don't match. Try again..")
+
+    die("Too many mistakes. Bye!")
 
 
 def kdfprf(p, s):
@@ -177,18 +192,27 @@ def kdfprf(p, s):
     return h0.digest()
 
 
+def pwverifier(k1, k2):
+    """Generate password verifier from passphrase pw, s1 and s2"""
+    s = HASH.new()
+    s.update(k1)
+    s.update(k2)
+    return s.digest()
+
+
 class cipher:
     """Abstraction of an encrypt/decrypt operation
 
     XXX We only support AES-256+SHA256+PBKDF2
     """
 
-    def __init__(self, encalgo, hashalgo, kdfalgo, keylen, saltlen, rounds):
+    def __init__(self, encalgo, hashalgo, kdfalgo, keylen, saltlen, rounds, bufsize=BUF_SIZE):
         #warn("enc=|%s| hash=|%s| kdf=|%s|, keylen=%d, saltlen=%d rounds=%d",
         #        encalgo, hashalgo, kdfalgo, keylen, saltlen, rounds)
         assert encalgo  == 'AES',    ("Encryption algorithm %s is unsupported" % encalgo)
         assert hashalgo == 'SHA256', ("Hash algorithm %s is unsupported" % hashalgo)
         assert kdfalgo  == 'PBKDF2', ("KDF algorithm %s is unsupported" % kdfalgo)
+        assert bufsize   > 0,         "Bufsize can't be zero"
 
         self.kdf     = PBKDF2
         self.cipher  = AES
@@ -196,31 +220,30 @@ class cipher:
         self.keylen  = keylen
         self.saltlen = saltlen
         self.rounds  = rounds
+        self.bufsize = bufsize
         self.infd    = None
         self.outfd   = None
 
 
-    def makekeys(self, pw, salt1=None, salt2=None):
+    def derivekeys(self, pw, s1):
+        """Derive the keys needed and return a verifier"""
         blksize = self.cipher.block_size
 
-        s1  = salt1 if salt1 else randbytes(self.saltlen)
-        s2  = salt2 if salt2 else randbytes(self.saltlen)
+        # Derive two keys worth of key-material: one for Enc and one for HMAC
+        kx  = self.kdf(pw, s1, self.keylen * 2, self.rounds, kdfprf)
+        k1  = kx[:self.keylen]
+        k2  = kx[self.keylen:]
 
-        k1  = self.kdf(pw, s1, self.keylen, self.rounds, kdfprf)
-        k2  = self.kdf(pw, s2, self.keylen, self.rounds, kdfprf)
-        vf  = "> %ds %ds" % (self.saltlen, self.saltlen)
-        h1  = pack(F_HDRFMT, 0x0, 0x0, 0x0, self.keylen, self.saltlen, self.rounds)
-        h2  = pack(vf, s1, s2)
-
-        # initial counter is derived from the salts above.
-        iv0 = hashem(s1 + s2)[:16]
+        # initial counter is derived from the salt
+        iv0 = sha512(s1)[:16]
         iv  = int(hexlify(iv0), 16)
 
         ctr = Counter.new(8 * blksize, initial_value=iv)
 
         self.H   = HMAC.new(k1, digestmod=self.shash)
         self.C   = self.cipher.new(k2, self.cipher.MODE_CTR, counter=ctr)
-        self.hdr = h1 + h2
+
+        return pwverifier(k1, k2)
 
 
     @classmethod
@@ -228,11 +251,11 @@ class cipher:
         """Initialize decryption by reading from 'infd'.
         """
 
-        hdr = infd.read(12) # fixed size header
-        if len(hdr) < 12:
-            die("Header incomplete, expected at least 12 bytes, saw %d bytes" % len(hdr))
+        fhdr = infd.read(F_HDRSZ) # fixed size header
+        if len(fhdr) < F_HDRSZ:
+            die("Header incomplete, expected at least %d bytes, saw %d bytes", F_HDRSZ, len(hdr))
 
-        vv  = unpack(F_HDRFMT, hdr)
+        vv  = unpack(F_HDRFMT, fhdr)
         ea  = vv[0]
         ha  = vv[1]
         ka  = vv[2]
@@ -243,21 +266,31 @@ class cipher:
         kl  = vv[3]
         sl  = vv[4]
         rr  = vv[5]
+        bs  = vv[6]
 
-    
-        hdr1 = hdr[:]
-        sln  = sl + sl
-        hdr  = infd.read(sln)
-        if len(hdr) < sln:
-            die("Header incomplete, expected %d bytes, saw %d bytes" % (sln, len(hdr)))
+        # Sanity check on unpacked header values
+        if kl > 128 or sl > 128:
+            die("key-length or salt-length too large")
 
-        vf  = "> %ds %ds" % (sl, sl)
-        vv  = unpack(vf, hdr)
-        cf  = cipher('AES', 'SHA256', 'PBKDF2', kl, sl, rr)
+        if bs == 0 or bs > (1024 * 1048576):
+            die("Invalid buffer size in header")
 
-        cf.makekeys(pw, vv[0], vv[1])
+        sln  = sl + HASHSIZE
+        vhdr = infd.read(sln)
+        if len(vhdr) < sln:
+            die("Header incomplete, expected %d bytes, saw %d bytes" % (sln, len(vhdr)))
 
-        hdr = hdr1 + hdr
+        # XXX If we change algorithms -- replace HASHSIZE with correct size
+        # obtained from header algorithm
+        vf  = "> %ds %ds" % (sl, HASHSIZE)
+        vv  = unpack(vf, vhdr)
+
+        cf  = cipher('AES', 'SHA256', 'PBKDF2', kl, sl, rr, bufsize=bs)
+        vx  = cf.derivekeys(pw, vv[0])
+        if not equal(vx, vv[1]):
+            die("Password mismatch. Aborting!")
+
+        hdr = fhdr + vhdr
         lb  = pack(">I", len(hdr))
         cf.H.update(lb)
         cf.H.update(hdr)
@@ -267,23 +300,30 @@ class cipher:
 
     def encbegin(self, pw, outfd):
         """Initialize operation"""
-
-        self.makekeys(pw)
-
-        lb = pack(">I", len(self.hdr))
-        self.H.update(lb)
-        self.H.update(self.hdr)
-        outfd.write(self.hdr)
         self.outfd = outfd
+
+        s1  = randbytes(self.saltlen)
+        v   = self.derivekeys(pw, s1)
+
+        vf  = "> %ds %ds" % (self.saltlen, HASHSIZE)
+        h1  = pack(F_HDRFMT, 0x0, 0x0, 0x0, self.keylen, self.saltlen, self.rounds, self.bufsize)
+        h2  = pack(vf, s1, v)
+
+        hdr = h1 + h2
+
+        lb = pack(">I", len(hdr))
+        self.H.update(lb)
+        self.H.update(hdr)
+        self.outfd.write(hdr)
 
 
     def enc(self, infd):
         """Encrypt by reading the input fd and writing to outfd"""
 
-        n = 0
+        n = 0L
         outfd = self.outfd
         while True:
-            buf = infd.read(BUF_SIZE)
+            buf = infd.read(self.bufsize)
             if not buf:
                 break
 
@@ -292,6 +332,7 @@ class cipher:
             outfd.write(eb)
             n += len(eb)
 
+        # Finally the total length of the data we've read so far.
         z = pack(">Q", n)
         self.H.update(z)
         outfd.write(self.H.digest())
@@ -300,11 +341,11 @@ class cipher:
     def dec(self, outfd):
         """Decrypt by reading the input and writing to outfd"""
 
-        n    = 0
+        n    = 0L
         infd = self.infd
-        prev = infd.read(BUF_SIZE)
-        while len(prev) == BUF_SIZE:
-            buf = infd.read(BUF_SIZE)
+        prev = infd.read(self.bufsize)
+        while len(prev) == self.bufsize:
+            buf = infd.read(self.bufsize)
             if not buf:
                 break
 
@@ -316,11 +357,11 @@ class cipher:
             prev = buf
 
         # Last block has the mac. Remove it before decrypting the rest of the content
-        if len(prev) < MACSIZE:
-            die("File corrupt? Last block too small (%d bytes)" % len(prev))
+        if len(prev) < HASHSIZE:
+            die("Corrupt file? Last block too small (%d bytes)" % len(prev))
 
-        file_mac = prev[-MACSIZE:]
-        ebuf     = prev[:-MACSIZE]
+        file_mac = prev[-HASHSIZE:]
+        ebuf     = prev[:-HASHSIZE]
 
         n += len(ebuf)
         self.H.update(ebuf)
@@ -329,12 +370,23 @@ class cipher:
         self.H.update(z)
         mac  = self.H.digest()
 
-        if file_mac != mac:
-            die("File corrupt? MAC mismatch")
+        if not equal(file_mac, mac):
+            die("Corrupt file? MAC mismatch")
 
         dbuf = self.C.decrypt(ebuf)
         outfd.write(dbuf)
 
+
+class nullwriter:
+    """Writer that throws away all its output"""
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def write(self, buf):
+        return len(buf)
+
+    def close(self):
+        return 0
 
 def regfile(a):
     """Return if st_mode info in 'a' points to a file or file like filesystem
@@ -382,15 +434,17 @@ def samefile(a, b):
 def openif(nm, fd, mod):
     """Open 'nm' if non-null else, fdopen 'fd'"""
 
+    if nm == '-': nm = None
+
     return open(nm, mod, BUF_SIZE) if nm else os.fdopen(fd.fileno(), mod)
 
 def main():
-    global VERSION 
+    global VERSION
 
     ap = argparse.ArgumentParser(description="""Portable encryption/decryption of file.
-            Encryption uses AES-256. The user supplied passphrase is used to
-            derive encryption and HMAC keys using the PBKDF2 function. Encrypted data is
-            authenticated with HMAC-SHA-256.
+            Encryption uses AES-256 in CTR mode. Encrypted data is authenticated with
+            HMAC-SHA-256 (Encrypt-then-MAC). The user supplied passphrase is used to
+            derive encryption and HMAC keys using the PBKDF2 function.
 
             If both input and output file names are identical, then the script
             assumes in-place transformation and uses temporary files for the
@@ -398,26 +452,29 @@ def main():
             """)
 
     ap.add_argument("-o", "--output", type=str, default=None, metavar='F',
-                    help="Write output to file 'F' [Stdout]")
+                    help="write output to file 'F' [STDOUT]")
     ap.add_argument("-k", "--env-pass", type=str, default=None, metavar='E',
-                    help="Read password from environment variable 'E' []")
+                    help="read password from environment variable 'E' []")
     ap.add_argument('-V', "--version", action='version', version=VERSION)
 
 
-    g = ap.add_mutually_exclusive_group()
-    g.add_argument("-e", "--encrypt", action="store_true",
-                    dest="encrypt", default=True,
-                    help="Run in encrypt mode [DEFAULT]")
-    g.add_argument("-d", "--decrypt", action="store_false",
-                    dest="encrypt", default=False,
-                    help="Run in decrypt mode")
-
-    ap.add_argument("infile", nargs='?', help="Input file to encrypt [Stdin]")
+    ap.add_argument("op", choices=['encrypt', 'decrypt', 'test'],
+                    help="operation to perform")
+    ap.add_argument("infile", nargs='?', help="input file to encrypt|decrypt|test [STDIN]")
 
     args = ap.parse_args()
 
+
     # Don't ask for password twice if we are decrypting.
-    pwd = get_pass(args.env_pass, tries=2 if args.encrypt else 1)
+    pwd = get_pass(args.env_pass, tries=2 if args.op == "encrypt" else 1)
+
+    if args.op == "test":
+        infd        = openif(args.infile, sys.stdin,  'rb')
+        outfd       = nullwriter()
+        cf          = cipher.decbegin(infd, pwd)
+        cf.dec(outfd)
+        infd.close()
+        return
 
     #print "PASS=%s ENV=%s" % (pwd, args.env_pass)
 
@@ -428,11 +485,10 @@ def main():
         args.infile = abspath(normpath(args.infile))
         args.output = args.infile + randchars(8)
 
-
     infd  = openif(args.infile, sys.stdin,  'rb')
     outfd = openif(args.output, sys.stdout, 'wb')
 
-    if args.encrypt:
+    if args.op == "encrypt":
         cf = cipher('AES', 'SHA256', 'PBKDF2', KEYLEN, SALTLEN, KEY_ROUNDS)
         cf.encbegin(pwd, outfd)
         cf.enc(infd)

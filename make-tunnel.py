@@ -84,14 +84,14 @@ spdflush;
 #
 
 add %(remotepub)s %(localpub)s esp %(remote_local_spi)s
-    -m tunnel
+    -m tunnel -r 32
     -E aes-ctr       0x%(RL_enc)s
-    -A hmac-sha2-256 0x%(RL_mac)s;
+    -A hmac-sha256 0x%(RL_mac)s;
 
 add %(localpub)s %(remotepub)s esp %(local_remote_spi)s
-    -m tunnel
+    -m tunnel -r 32
     -E aes-ctr       0x%(LR_enc)s
-    -A hmac-sha2-256 0x%(LR_mac)s;
+    -A hmac-sha256 0x%(LR_mac)s;
 
 """
 

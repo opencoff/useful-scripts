@@ -40,6 +40,7 @@ xverify() {
 }
 
 testsz() {
+    #set -x
     local sz=$1; shift
 
     local inf=/tmp/in$sz
@@ -53,26 +54,73 @@ testsz() {
     fi
 
     begin "Testing file $sz .."
-    FX=abcdef $AES -e -k FX $inf -o $enc || exit 1
-    FX=abcdef $AES -d -k FX $enc -o $dec || exit 1
+    FX=abcdef $AES -k FX encrypt $inf -o $enc || exit 1
+    FX=abcdef $AES -k FX test    $enc         || exit 1
+    FX=abcdef $AES -k FX decrypt $enc -o $dec || exit 1
     xverify $inf $dec || exit 1
 
     begin "Testing inplace $sz .."
     cp $inf $enc
-    FX=abcdef $AES -e -k FX $enc -o $enc || exit 1
+    FX=abcdef $AES -k FX encrypt $enc -o $enc || exit 1
 
     cp $enc $dec
-    FX=abcdef $AES -d -k FX $dec -o $dec || exit 1
+    FX=abcdef $AES -k FX decrypt $dec -o $dec || exit 1
     xverify $inf $dec || exit 1
 
-
     begin "Testing stdio $sz .."
-    FX=abcdef $AES -e -k FX < $inf > $enc || exit 1
-    FX=abcdef $AES -d -k FX < $enc > $dec || exit 1
+    FX=abcdef $AES -k FX encrypt < $inf > $enc || exit 1
+    FX=abcdef $AES -k FX decrypt < $enc > $dec || exit 1
     xverify $inf $dec || exit 1
 
 
     rm -f $inf $enc $dec
+}
+
+# Full suite of functional tests
+basic() {
+    local sz=3791
+    local inf=/tmp/in$sz
+    local enc=/tmp/enc$sz
+    local dec=/tmp/dec$sz
+    local enc2=${enc}.2
+    local szskip=$(( sz / 2 ))
+    local badcount=$(( sz / 4 ))
+
+    dd if=/dev/urandom of=$inf bs=$sz count=1 2>/dev/null || exit 1
+
+    begin "Testing basic functions with size $sz .."
+    FX=abcdef $AES -k FX encrypt $inf -o $enc || exit 1
+    FX=abcdef $AES -k FX test    $enc         || exit 1
+    FX=abcdef $AES -k FX decrypt $enc -o $dec || exit 1
+    xverify $inf $dec || exit 1
+
+    # Bad password should fail
+    FX=abcxyz $AES -k FX test    $enc         2>/dev/null && exit 1
+
+    # Corrupted enc file should fail
+    cp $enc $enc2 || exit 1
+    dd if=/dev/urandom of=$enc2 count=1 bs=$(($szskip / 3)) \
+        seek=$szskip conv=notrunc 2>/dev/null  || exit 1
+    FX=abcdef $AES -k FX test    $enc2          2>/dev/null && exit 1
+
+    begin "Testing basic inplace with size $sz .."
+    cp $inf $enc
+    FX=abcdef $AES -k FX encrypt $enc -o $enc || exit 1
+
+    cp $enc $dec
+    FX=abcdef $AES -k FX decrypt $dec -o $dec || exit 1
+    xverify $inf $dec || exit 1
+
+    begin "Testing basic stdio with size $sz .."
+    FX=abcdef $AES -k FX encrypt < $inf > $enc || exit 1
+    FX=abcdef $AES -k FX decrypt < $enc > $dec || exit 1
+    xverify $inf $dec || exit 1
+
+
+    # Now test corrupted files and bad mac
+
+    rm -f $inf $enc $dec $enc2
+
 }
 
 # Generate random ints between [100, 100000)
@@ -95,6 +143,8 @@ randsz() {
 
 
 trap 'exit 0' INT TERM QUIT
+
+basic
 
 # Test various sizes
 for s in 0 1 2 3 4 8 16 128 512 4096 16384 1048576

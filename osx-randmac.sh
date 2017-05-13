@@ -32,7 +32,7 @@ Me=`id -u`
 #e=echo
 
 Installdir=/Library/LaunchDaemons
-Bindir=/usr/sbin
+Bindir=/usr/local/bin
 
 PATH=/sbin:/usr/sbin:/bin:/usr/bin:$PATH
 export PATH
@@ -90,7 +90,8 @@ test -n "$action" || usage
 shift
 
 function writelog {
-    $e logger -p "daemon.notice" -t "${FNAME}" "$@"
+    #$e logger -p "daemon.notice" -t "${FNAME}" "$@"
+    echo "`date`: $@" >> /tmp/mac.log
 }
 
 
@@ -220,7 +221,8 @@ function update_mac {
 
     $e $net -detectnewhardware
 
-    writelog "$iface: MAC updated to $mac"
+    #writelog "$iface: MAC updated to $mac"
+    writelog "$iface: $mac"
 
     return 0
 }
@@ -309,19 +311,16 @@ else
 fi
 
 
+r=0
 case $action in
     start|update)
-        if [ $Me -ne 0 ]; then
-            #die "Need root privileges to set/update MAC address"
-            true
-        fi
-
-        writelog "$iface: Updating MAC Address .."
         update_mac $iface
+        r=$?
         ;;
 
     install)
         install_service ${iface} ${FNAME}
+        r=$?
         ;;
 
     stop|restart)
@@ -331,5 +330,6 @@ case $action in
         usage
         ;;
 esac
+exit $r
 
 # EOF
