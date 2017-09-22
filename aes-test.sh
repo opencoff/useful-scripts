@@ -5,6 +5,7 @@
 # License: Public Domain
 
 AES=./aes.py
+[ -n "$PYTHON" ] && AES="$PYTHON $AES"
 #AES='python3.4 ./aes.py'
 
 uname=`uname`
@@ -144,6 +145,7 @@ randsz() {
 
 trap 'exit 0' INT TERM QUIT
 
+echo "Testing $AES .."
 basic
 
 # Test various sizes

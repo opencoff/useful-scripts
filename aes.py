@@ -4,6 +4,7 @@
 # Tested on:
 #  - Python 2.7
 #  - Python 3.4
+#  - Python 3.5
 #
 # (c) 2012 Sudhi Herle <sw at herle.net>
 # License: GPLv2
@@ -98,14 +99,22 @@ def die(fmt, *args):
 
 
 def equal(a,b):
-    """Constant time equals for iterables"""
+    """Constant time equals for iterables
+
+    For PY3K, bytes objects are already integers. So, no need for ord()
+    """
+
     if len(a) != len(b): return False
 
+    am = a if PY3K else map(ord, a)
+    bm = b if PY3K else map(ord, b)
+
     v = 0
-    for x, y in zip(a,b):
-        v |= ord(x) ^ ord(y)
+    for x, y in zip(am, bm):
+        v |= x ^ y
 
     return True if v == 0 else False
+
 
 def randbytes(n):
     """Get a random string of n bytes length"""
@@ -193,7 +202,8 @@ def kdfprf(p, s):
 
 
 def pwverifier(k1, k2):
-    """Generate password verifier from passphrase pw, s1 and s2"""
+    """Generate password verifier from two KDF derived keys"""
+
     s = HASH.new()
     s.update(k1)
     s.update(k2)
@@ -320,7 +330,7 @@ class cipher:
     def enc(self, infd):
         """Encrypt by reading the input fd and writing to outfd"""
 
-        n = 0L
+        n = 0
         outfd = self.outfd
         while True:
             buf = infd.read(self.bufsize)
@@ -341,7 +351,7 @@ class cipher:
     def dec(self, outfd):
         """Decrypt by reading the input and writing to outfd"""
 
-        n    = 0L
+        n    = 0
         infd = self.infd
         prev = infd.read(self.bufsize)
         while len(prev) == self.bufsize:
@@ -407,14 +417,14 @@ def samefile(a, b):
     except Exception as ex:
         die("%s: %s", a, str(ex))
 
+    if not regfile(sta.st_mode):
+        die("%s is not a file like entry?", a)
+
     # It is NOT an error for the output file to NOT exist!
     try:
         stb = os.stat(b)
     except:
         return False
-
-    if not regfile(sta.st_mode):
-        die("%s is not a file like entry?", a)
 
     if not regfile(stb.st_mode):
         die("%s is not a file like entry?", b)
@@ -423,13 +433,21 @@ def samefile(a, b):
     if sta.st_dev  != stb.st_dev:   return False
     if sta.st_rdev != stb.st_rdev:  return False
 
+    # We only check for writability of dirname(a) only if we are certain that a
+    # and b are the same file.
     # Now, make sure the parent dir of 'a' is writable.
     adir = dirname(a)
-    std  = os.stat(adir)
+    try:
+        std  = os.stat(adir)
+    except Exception as ex:
+        die("%s: %s", adir, str(ex))
+
     if S_IWUSR != (S_IWUSR & std.st_mode):
         die("Directory %s is not writable for inplace operation.", adir)
 
+
     return True
+
 
 def openif(nm, fd, mod):
     """Open 'nm' if non-null else, fdopen 'fd'"""
