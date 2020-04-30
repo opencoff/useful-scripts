@@ -4,9 +4,12 @@
 # Author: Sudhi Herle
 # License: Public Domain
 
+TMP=$HOME/tmp/aes
 AES=./aes.py
 [ -n "$PYTHON" ] && AES="$PYTHON $AES"
 #AES='python3.4 ./aes.py'
+
+mkdir -p $TMP || exit 1
 
 uname=`uname`
 case $uname in
@@ -43,10 +46,13 @@ xverify() {
 testsz() {
     #set -x
     local sz=$1; shift
+    local bsiz=$1; shift
 
-    local inf=/tmp/in$sz
-    local enc=/tmp/enc$sz
-    local dec=/tmp/dec$sz
+    [ -n "$bsiz" ] && bsiz="-B $bsiz"
+
+    local inf=${TMP}/in$sz
+    local enc=${TMP}/enc$sz
+    local dec=${TMP}/dec$sz
 
     if [ $sz -gt 0 ]; then
         dd if=/dev/urandom of=$inf bs=$sz count=1 2>/dev/null
@@ -54,23 +60,28 @@ testsz() {
         touch $inf
     fi
 
-    begin "Testing file $sz .."
-    FX=abcdef $AES -k FX encrypt $inf -o $enc || exit 1
-    FX=abcdef $AES -k FX test    $enc         || exit 1
-    FX=abcdef $AES -k FX decrypt $enc -o $dec || exit 1
+    echo "File size $sz:"
+
+    begin "  regular file I/O ..."
+    FX=abcdef $AES -k FX $bsiz encrypt $inf -o $enc || exit 1
+    FX=abcdef $AES -k FX $bsiz test    $enc         || exit 1
+    FX=abcdef $AES -k FX $bsiz decrypt $enc -o $dec || exit 1
     xverify $inf $dec || exit 1
 
-    begin "Testing inplace $sz .."
+    begin "  streaming I/O ..."
+    cat $inf | FX=abcdef $AES -k FX $bsiz encrypt | cat > $enc
+    [ $? -ne 0 ] && end Fail && exit 1
+
+    cat $enc | FX=abcdef $AES -k FX $bsiz decrypt | cat > $dec
+    [ $? -ne 0 ] && end Fail && exit 1
+    xverify $inf $dec || exit 1
+
+    begin "  inplace ..."
     cp $inf $enc
-    FX=abcdef $AES -k FX encrypt $enc -o $enc || exit 1
+    FX=abcdef $AES -k FX $bsiz encrypt $enc -o $enc || exit 1
 
     cp $enc $dec
-    FX=abcdef $AES -k FX decrypt $dec -o $dec || exit 1
-    xverify $inf $dec || exit 1
-
-    begin "Testing stdio $sz .."
-    FX=abcdef $AES -k FX encrypt < $inf > $enc || exit 1
-    FX=abcdef $AES -k FX decrypt < $enc > $dec || exit 1
+    FX=abcdef $AES -k FX $bsiz decrypt $dec -o $dec || exit 1
     xverify $inf $dec || exit 1
 
 
@@ -79,32 +90,41 @@ testsz() {
 
 # Full suite of functional tests
 basic() {
-    local sz=3791
-    local inf=/tmp/in$sz
-    local enc=/tmp/enc$sz
-    local dec=/tmp/dec$sz
+    #set -x
+    local sz=$(randsz)
+    local inf=${TMP}/in$sz
+    local enc=${TMP}/enc$sz
+    local dec=${TMP}/dec$sz
     local enc2=${enc}.2
-    local szskip=$(( sz / 2 ))
-    local badcount=$(( sz / 4 ))
+    local szskip=$(( $sz / 2 ))
+    local badcount=$(( $sz / 4 ))
+    local bsize=$(( $sz / 2 ))
 
     dd if=/dev/urandom of=$inf bs=$sz count=1 2>/dev/null || exit 1
 
-    begin "Testing basic functions with size $sz .."
+    echo "Basic tests with size $sz .."
+    begin "  basic functions ..."
     FX=abcdef $AES -k FX encrypt $inf -o $enc || exit 1
     FX=abcdef $AES -k FX test    $enc         || exit 1
     FX=abcdef $AES -k FX decrypt $enc -o $dec || exit 1
     xverify $inf $dec || exit 1
 
+    begin "  basic functions (bufsize $bsize) ..."
+    FX=abcdef $AES -k FX -B $bsize encrypt $inf -o $enc || exit 1
+    FX=abcdef $AES -k FX -B $bsize test    $enc         || exit 1
+    FX=abcdef $AES -k FX -B $bsize decrypt $enc -o $dec || exit 1
+    xverify $inf $dec || exit 1
+
     # Bad password should fail
-    FX=abcxyz $AES -k FX test    $enc         2>/dev/null && exit 1
+    FX=abcxyz $AES -k FX test    $enc         2>/dev/null && end Fail && exit 1
 
     # Corrupted enc file should fail
     cp $enc $enc2 || exit 1
-    dd if=/dev/urandom of=$enc2 count=1 bs=$(($szskip / 3)) \
+    dd if=/dev/urandom of=$enc2 count=1 bs=$(($szskip * 2)) \
         seek=$szskip conv=notrunc 2>/dev/null  || exit 1
-    FX=abcdef $AES -k FX test    $enc2          2>/dev/null && exit 1
+    FX=abcdef $AES -k FX test    $enc2          2>/dev/null && end Fail && exit 1
 
-    begin "Testing basic inplace with size $sz .."
+    begin "  inplace ..."
     cp $inf $enc
     FX=abcdef $AES -k FX encrypt $enc -o $enc || exit 1
 
@@ -112,22 +132,22 @@ basic() {
     FX=abcdef $AES -k FX decrypt $dec -o $dec || exit 1
     xverify $inf $dec || exit 1
 
-    begin "Testing basic stdio with size $sz .."
-    FX=abcdef $AES -k FX encrypt < $inf > $enc || exit 1
-    FX=abcdef $AES -k FX decrypt < $enc > $dec || exit 1
+    begin "  stream input and output ..."
+    cat $inf | FX=abcdef $AES -k FX encrypt | cat > $enc
+    [ $? -ne 0 ] && end Fail && exit 1
+
+    cat $enc | FX=abcdef $AES -k FX decrypt | cat > $dec
+    [ $? -ne 0 ] && end Fail && exit 1
     xverify $inf $dec || exit 1
-
-
-    # Now test corrupted files and bad mac
 
     rm -f $inf $enc $dec $enc2
 
 }
 
-# Generate random ints between [100, 100000)
+# Generate random ints between x and y
 randsz() {
-    local x=101
-    local y=100000
+    local x=78329
+    local y=900000
     local r=$(( $y - $x + 1))
     local n=0
 
@@ -143,7 +163,7 @@ randsz() {
 }
 
 
-trap 'exit 0' INT TERM QUIT
+trap "rm -rf $TMP; exit 0" INT TERM QUIT
 
 echo "Testing $AES .."
 basic
@@ -158,6 +178,7 @@ done
 n=8
 while [ $n -gt 0 ]; do
     n=$(( $n - 1 ))
-    testsz $(randsz)
+    sz=$(randsz)
+    testsz $sz $(( $sz / 8 ))
 done
 

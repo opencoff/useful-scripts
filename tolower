@@ -56,13 +56,13 @@ else:
 
 def dummy_rename(old, new):
     """Print what would happen"""
-    print "mv '%s'     '%s'" % (old, new)
+    print("mv '%s'     '%s'" % (old, new))
 
 def verbose_real(fmt, *args):
     sfmt = fmt
     if args:
         sfmt = fmt % args
-    print sfmt
+    print(sfmt)
     sys.stdout.flush()
 
 def no_verbose(fmt, *args):
@@ -123,8 +123,8 @@ def do_rename(a, b):
 
     try:
         rename(a, b)
-    except Exception, e:
-        print >>sys.stderr, "Can't rename '%s' -> '%s': %s" % (a, b, str(e))
+    except Exception as e:
+        print("Can't rename '%s' -> '%s': %s" % (a, b, str(e)), file=sys.stderr)
 
 def lowerize(p, transform):
     """Convert 'p' to lowercase"""
@@ -168,13 +168,13 @@ def unit_test(transform):
     test_vectors = ['abc.txt', 'abc DEF ghi.txt', 'ABC DEF.txt', 'Abc_Def.txt', 'ABC.TXT' ]
     for t in test_vectors:
         n = transform(t)
-        print "%s => %s" % (t, n)
+        print("%s => %s" % (t, n), file=sys.stderr)
 
 
 # -- main --
 
 if len(sys.argv) < 2:
-   print >>sys.stderr, "Usage: %s file [...]" % sys.argv[0]
+   print("Usage: %s file [...]" % sys.argv[0], file=sys.stderr)
    sys.exit(1)
 
 rename  = dummy_rename
@@ -207,7 +207,7 @@ parser.add_option("-M", "--mixed-case", dest="mixed_case", action="store_true",
 (opt, args) = parser.parse_args()
 
 if len(args) < 1:
-    print >>sys.stderr, "%s: Insufficient arguments. Try '%s --help'" % (Z, Z)
+    print("%s: Insufficient arguments. Try '%s --help'" % (Z, Z), file=sys.stderr)
     sys.exit(1)
 
 

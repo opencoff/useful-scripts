@@ -5,4 +5,4 @@ import os.path, sys
 # Eliminate symbolic links and return the canonical path without
 # superfluous ../../..; // etc.
 for a in sys.argv[1:]:
-    print os.path.realpath(os.path.normpath(a))
+    print(os.path.realpath(os.path.normpath(a)))

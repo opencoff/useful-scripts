@@ -11,7 +11,7 @@ def make_uuid(filename):
 
 
 if len(sys.argv) < 2:
-    print "usage: %s rawdiskimagefilename [vmdk name]" % sys.argv[0]
+    print("usage: %s rawdiskimagefilename [vmdk name]" % sys.argv[0])
     sys.exit(1)
 
 filename = abspath(normpath(sys.argv[1]))
@@ -20,11 +20,11 @@ if len(sys.argv) > 2:
     vmdkfilename = sys.argv[2]
 
 if not os.path.exists(filename):
-    print "File not found: %s" % filename
+    print("File not found: %s" % filename)
     sys.exit(1)
 
 r = 0x1a1e708919272998fadcb2aa11faf63fL
-r += random.randint(1L << 32, 1L << 40)
+r += random.randint(1 << 32, 1 << 40)
 
 vmdk = file(vmdkfilename, 'w')
 

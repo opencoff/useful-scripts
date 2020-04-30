@@ -43,7 +43,7 @@ _hexrand() {
 _randmac() {
     # These are VMware, Xen and Parallels OUIs
     set -A vendors "00:05:69" "00:0c:29" "00:1c:14" "00:50:56" \
-                   "00:1c:42" "00:16:3e"
+                   "00:1c:42" "00:16:3e" "00:bb:3a" "e0:cb:1d"
     typeset n=${#vendors[@]}
 
     typeset rr=$(_rand4)

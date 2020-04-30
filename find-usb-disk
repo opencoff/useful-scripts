@@ -1,34 +1,177 @@
 #! /bin/bash
 
+# Find and print info about USB devices on linux.
+# (c) 2005-2018 Sudhi Herle <sw@herle.net>
+# License: GPLv2
 
-#set -x 
-find_usb_disk() {
-    disk=
-    entries=`ls /sys/block | sort`
-    for e in $entries; do
-        d=/sys/block/$e
-        n=`readlink $d | grep usb | wc -l`
-        if [ $n -eq 0 ]; then
+Z=`basename $0`
+e=echo
+Verbose=0
+Partition=0
+
+
+die() {
+    echo "$Z: $@" 1>&2
+    exit 0
+}
+
+warn() {
+    echo "$Z: $@" 1>&2
+}
+
+Uname=$(uname)
+case $Uname in
+    Linux*)
+        ;;
+
+    *) die "This only works on Linux!"
+        ;;
+esac
+
+Fdisk=$(type -p fdisk)
+[ -z $Fdisk ] && warn "Can't find fdisk; No partition info .."
+
+
+main() {
+    local ac_prev=
+    local args=
+    local ac_option=
+    local ac_optarg=
+
+    for ac_option
+    do
+      shift
+
+      if [ -n "$ac_prev" ]; then
+        eval "$ac_prev=\$ac_option"
+        ac_prev=
             continue
         fi
 
-        i=`basename $d`
-        dev=/dev/$i
-        sys=/sys/block/$i
+      case "$ac_option" in
+          -*=*) ac_optarg=`echo "$ac_option" | sed 's/[-_a-zA-Z0-9]*=//'` ;;
+          *) ac_optarg= ;;
+      esac
 
-        rm=`cat $sys/removable`
-        if [ $rm -eq 0 ]; then
-            continue    # ignore fixed disks
-        fi
 
-        
-        sz=`cat $sys/size`
-        if [ $sz -gt 0 ]; then
-            echo $dev
-        fi
+      case "$ac_option" in
+            --help|-h|--hel|--he|--h)
+                usage;
+                ;;
+
+                -v|--verbose)
+                   Verbose=1
+                    ;;
+
+                -p|--show-partitions)
+                    Partition=1
+                    ;;
+
+                --debug|-x)
+                    set -x
+                    ;;
+
+            *) # first non option terminates option processing.
+               # we gather all remaining args and bundle them up.
+                args="$args $ac_option"
+                for xx
+                do
+                    args="$args $xx"
+                done
+                break
+                ;;
+      esac
     done
 
+    find_usb_disk
+}
+
+find_usb_disk() {
+    local root=/dev/disk/by-path
+    for e in $(ls $root | grep usb); do
+        local fp=$root/$e
+        local nm=$(readlink $fp)
+
+        nm=$(basename $nm)
+        local disk=${nm%%[1-9]*}
+        [ $nm == $disk ] && print_disk "/dev/$disk" /sys/block/$disk
+    done
     return 0
 }
 
-find_usb_disk
+
+# Print details of a disk
+print_disk() {
+    local dev=$1
+    local sysfs=$2
+    local sz=$(cat $sysfs/size)
+
+    # XXX Implcitly convert to GB
+    # size is in sectors (512 bytes).
+    sz=$(humanize $sz)
+
+    if [ $Verbose -gt 0 ]; then
+        local mf=$sysfs/device/model
+        local vf=$sysfs/device/vendor
+        local model="UNKNOWN"
+        local vendor="UNKNOWN"
+
+        test -f $mf && model=$(cat $mf | sed -e 's/  *$//')
+        test -f $vf && vendor=$(cat $vf | sed -e 's/  *$//')
+
+        echo "$dev: $sz; $vendor [$model]"
+    else
+        echo "$dev: $sz"
+        fi
+
+    if [ $Partition -gt 0 ]; then
+        [ -n "$Fdisk" ] && $Fdisk -l $dev
+    fi
+        
+    return 0
+}
+
+usage() {
+
+    cat <<EOF
+$0 - List USB Drives and their partitions.
+
+Usage: $0 [options]
+
+
+Options:
+    -h, --help           Show this help message and quit
+    -v, --verbose        Show verbose info about disk vendor etc.
+    -p, --show-partition Show partition info as well
+    -x, --debug          Run script in trace mode (set -x)
+EOF
+
+    exit 0
+}
+
+
+# humanize the size provided in sectors
+humanize() {
+    local sz=$1
+
+    if [ $sz -lt 2097152 ]; then
+        sz=$(( $sz / 2048 ))
+        echo "$sz MB"
+        return 0
+    fi
+
+    if [ $sz -lt 2147483648 ]; then
+        sz=$(( $sz / 2097152 ))
+        echo "$sz GB"
+        return 0
+        fi
+
+    sz=$(( $sz / 2147483648 ))
+    echo "$sz TB"
+    return 0
+}
+
+
+main "$@"
+#
+# EOF

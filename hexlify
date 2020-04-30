@@ -8,31 +8,92 @@
 # License: GPLv2
 #
 
-import os, sys, base64
+import os, sys, base64, argparse
 from os.path   import basename, dirname, abspath, normpath, join
 from binascii  import hexlify
-from optparse  import Option, OptionParser, OptionValueError
 from functools import partial
 
 Z = basename(sys.argv[0])
 
-def die(fmt, *args):
-    warn(fmt, args)
-    exit(1)
+def main():
+    usage = """%(Z)s - Flexible hex|base64 data dumper """ % { 'Z': Z }
 
-def warn(fmt, *args):
-    sfmt = "%s: %s" % (Z, fmt)
-    if args: sfmt = sfmt % args
+    pp = argparse.ArgumentParser(description=usage)
+    pp.add_argument('-L', '--line-length', dest="linelen", default=0,
+                    type=int, metavar="N",
+                    help="Break output line into 'N' character chunks [%(default)s]")
+    pp.add_argument('-n', '--Nbytes', dest="N", default=0,
+                    type=int, metavar="N",
+                    help="Only read N bytes of input data (0 implies until EOF) [%(default)s]")
+    pp.add_argument("-o", "--outfile", dest="outfile", default=None,
+                    metavar="F", type=str,
+                    help="write output to file F [STDOUT]")
 
-    if not sfmt.endswith('\n'): sfmt += '\n'
+    g = pp.add_mutually_exclusive_group()
+    g.add_argument('-b', '--base64', dest='b64', action="store_true", default=False,
+                    help="Base64 decode the input first [%(default)s]")
+    g.add_argument('-d', '--dump', dest='dump', action="store_true", default=False,
+                    help="Show a hexdump style output [%(default)s]")
+    g.add_argument('-c', '--c-type', dest="ctype", action="store_true", default=False,
+                    help="Generate a C like array definition [%(default)s]")
 
-    sys.stdout.flush()
-    sys.stderr.write(sfmt)
-    sys.stderr.flush()
+    pp.add_argument("infile", nargs="*", type=str, help="zero or more input files")
+
+    args = pp.parse_args()
+
+    out = sys.stdout
+    if args.outfile:
+        out = open(args.outfile, 'w')
+
+    barehex = partial(hexlate, N=args.N, L=args.linelen, hexer=hexlify, pref='',    suff='\n', lf="\n")
+    chex    = partial(hexlate, N=args.N, L=args.linelen, hexer=chexlify, pref="{\n", suff="}\n", lf=",\n")
+    dumper  = partial(dumpify, N=args.N, L=args.linelen)
+
+    if args.ctype:
+        hexify = chex
+    elif args.dump:
+        hexify = dumper
+    else:
+        hexify = barehex
+
+    if len(args.infile) > 0:
+        for fd, fn in argv2fd(args.infile):
+            hexify(fd, out, args.b64)
+    else:
+        hexify(sys.stdin, out, args.b64)
+
+def argv2fd(argv):
+    """Generator that yields open fd's from names in argv"""
+    if len(argv) == 0:
+        return
+
+    for fn in argv:
+        fd = open(fn, 'rb')
+        yield fd, fn
+        fd.close()
 
 def chexlify(b):
     """like binascii.hexlify() except writes C like bytes"""
     return ', '.join(["%#2.2x" % ord(x) for x in b])
+
+def dumpify(infd, outfd, ign, N, L):
+    """Call hexdump.."""
+
+    if L == 0: L = 16
+    if N > 0:
+        b = infd.read(N)
+        if not b:
+            return
+        x = hexdump(b, stride=L)
+        outfd.write(x)
+    else:
+        while True:
+            b = infd.read(65536)
+            if not b: break
+            x = hexdump(b, stride=L)
+            outfd.write(x)
+
+    outfd.write('\n')
 
 def hexlate(infd, outfd, b64, N, L, hexer, pref, suff, lf):
     """Transcribe bytes from 'infd' to 'outfd' in hex. Breakup lines
@@ -73,54 +134,34 @@ def hexlate(infd, outfd, b64, N, L, hexer, pref, suff, lf):
     outfd.write(suff)
 
 
+def hexdump(src, stride=16, sep='.'):
+    chrtab = [(len(repr(chr(x))) == 3) and chr(x) or sep for x in range(256)]
+    lines  = []
+    for c in xrange(0, len(src), stride):
+        chars = src[c:c+stride]
+        hexb  = ' '.join(["%02x" % ord(x) for x in chars])
+        if len(hexb) > 24:
+            hexb = "%s %s" % (hexb[:24], hexb[24:])
+        pr = ''.join(["%s" % chrtab[ord(x)] for x in chars])
+        lines.append("%08x:  %-*s  |%s|" % (c, stride*3, hexb, pr))
 
-usage = """%(Z)s [options] [infile ..] [outfile]
+    return '\n'.join(lines)
 
-%(Z)s - Convert input stream into hex and optionally break it into
-multiple output lines.
+def die(fmt, *args):
+    warn(fmt, args)
+    exit(1)
 
-""" % { 'Z': Z }
+def warn(fmt, *args):
+    sfmt = "%s: %s" % (Z, fmt)
+    if args: sfmt = sfmt % args
 
-pp = OptionParser(usage=usage)
-pp.add_option('-L', '--line-length', dest="linelen", action="store",
-              default=0, type="int", metavar="N",
-              help="Break output line into 'N' character chunks [%default]")
-pp.add_option('-n', '--Nbytes', dest="N", action="store",
-              default=0, type="int", metavar="N",
-              help="Only read N bytes of input data (0 implies until EOF) [%default]")
-pp.add_option('-b', '--base64', dest='b64', action="store_true", default=False,
-              help="Base64 decode the input first [%default]")
-pp.add_option('-c', '--c-type', dest="ctype", action="store_true", default=False,
-              help="Generate a C like array definition [%default]")
+    if not sfmt.endswith('\n'): sfmt += '\n'
 
-opt, args = pp.parse_args()
+    sys.stdout.flush()
+    sys.stderr.write(sfmt)
+    sys.stderr.flush()
 
-out = sys.stdout
-if len(args) > 1:
-    outf = args[-1]
-    args = args[:-1]
-    try:
-        out = open(outf, 'w')
-    except Exception, ex:
-        die("Can't create output file '%s': %s", outf, ex)
 
-barehex = partial(hexlate, N=opt.N, L=opt.linelen, hexer=hexlify, pref='',    suff='\n', lf="\n")
-chex    = partial(hexlate, N=opt.N, L=opt.linelen, hexer=chexlify, pref="{\n", suff="}\n", lf=",\n")
-
-hexify = chex if opt.ctype else barehex
-
-if len(args) > 0:
-    for fn in args:
-        try:
-            infd = open(fn, 'rb')
-        except Exception, ex:
-            warn("Can't read file '%s': %s", fn, ex)
-            continue
-
-        hexify(infd, out, opt.b64)
-        infd.close()
-
-else:
-    hexify(sys.stdin, out, opt.b64)
+main()
 
 # EOF

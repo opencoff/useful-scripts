@@ -47,10 +47,10 @@ modules, it will be placed in one of two places:
 def error(doex, fmt, *args):
     sfmt = "%s: %s" % (Z, fmt)
     if args:
-        str = sfmt % args
+        s = sfmt % args
     else:
-        str = sfmt
-    print >>sys.stderr, str
+        s = sfmt
+    print(s, file=sys.stderr)
     if doex > 0:
         sys.exit(doex)
 
@@ -113,16 +113,17 @@ def abbrev(wordlist):
 
 def grok_kver(objdir):
     """Grok kernel version from objdir"""
-    hdrdir = [ join(objdir, 'include', 'linux'), 
+    hdrdir = [
                join(objdir, 'include', 'generated'), 
+               join(objdir, 'include', 'linux'),
              ]
     rel = None
     for e in ['version.h', 'utsrelease.h']:
         for d in hdrdir:
             f = join(d, e)
             try:
-                fd = file(f, 'r')
-            except:
+                fd = open(f, 'r')
+            except Exception as ex:
                 continue
 
             for line in fd:
@@ -144,7 +145,7 @@ def run_program(args, use_fakeroot=False):
     else:
         cmd = args
 
-    print ' '.join(cmd)
+    print(' '.join(cmd))
     sys.stdout.flush()
     r = os.spawnvp(os.P_WAIT, cmd[0], cmd)
     if r != 0:
@@ -165,9 +166,9 @@ def add_tarobj(tf, src):
     ti       = tf.gettarinfo(src)
     ti.uid   = 0
     ti.gid   = 0
-    ti.mode  = 0644
+    ti.mode  = 0o644
     if os.path.isdir(src):
-        ti.mode |= 0111
+        ti.mode |= 0o111
     ti.uname = 'root'
     ti.gname = 'root'
     tf.addfile(ti)
@@ -226,6 +227,7 @@ if opt.config is not None and not os.path.isfile(opt.config):
 Arch_aliases = {
                  'x86':  'x86',
                  'i386': 'x86',
+                 'amd64': 'x86',
                  'uml':  'um',
                }
 
@@ -247,12 +249,13 @@ else:
     arch_suffix = ""
 
 # Find a canonical name for arch
-canonarch = Arch_aliases.get(arch, arch)
+origarch = arch
+arch = Arch_aliases.get(arch, arch)
 
 # Make an abbreviation table for all archs present
 arch_ab = abbrev(os.listdir('./arch'))
 
-if canonarch not in arch_ab:
+if arch not in arch_ab:
     error(1, "Unknown architecture '%s'", arch)
 
 
@@ -261,12 +264,12 @@ objdir = join(pwd, opt.objdir, 'obj-%s%s' % (arch, arch_suffix))
 objdir = realpath(normpath(objdir))
 
 if not os.path.isdir(objdir):
-    os.mkdir(objdir, 0755)
+    os.mkdir(objdir, 0o755)
 
 # If config file is specified, use it.
 defconfig = join(objdir, '.config')
 if not os.path.isfile(defconfig) and opt.config is not None:
-    print "Using config file '%s'" % opt.config
+    print("Using config file '%s'" % opt.config)
     copyfile(opt.config, defconfig)
 
 make_args = [ 'make',
@@ -284,7 +287,11 @@ if not opt.tarfile:
 kver  = grok_kver(objdir)
 
 # Substitution dict for the files list below and other places
-subst = {'kver': kver, 'arch': arch, 'suffix': arch_suffix}
+subst = {'kver': kver,
+        'arch': arch,
+        'origarch': origarch,
+        'suffix': arch_suffix,
+        }
 
 
 # List of kernel output files that are needed when we build the
@@ -296,19 +303,19 @@ files = { Arch_kimage[arch]: 'vmlinuz-%(kver)s',
         }
 
 
-tarname   = 'kern_%(arch)s%(suffix)s-%(kver)s.tar' % subst
-tardir    = os.environ.get('HOME', '.')
-tarname   = abspath(join(tardir, 'kernel-images', arch, tarname))
+tarname   = 'kern_%(origarch)s%(suffix)s-%(kver)s.tar' % subst
+tardir    = os.getcwd()
+tarname   = abspath(join(tardir, tarname))
 bztarname = tarname + '.bz2'
 
-print "Making tarball %s .." % bztarname
+print("Making tarball %s .." % bztarname)
 
 unlink_if(tarname, bztarname)
 
 # First, create a temp dir
 tmpdir = abspath('./tmp/kinst%d' % random.randint(1000,10000000))
 kinst  = join(tmpdir, 'boot')
-os.makedirs(kinst, 0755)
+os.makedirs(kinst, 0o755)
 for s, d in files.items():
     src = join(objdir, s)
     dst = join(kinst, d % subst)
@@ -330,7 +337,7 @@ run_program(depmod, True)
 dn = dirname(tarname)
 if not os.path.isdir(dn):
     #print "mkdir -p %s" % dn
-    os.makedirs(dn, 0755)
+    os.makedirs(dn, 0o755)
 
 tar   = ['tar', 'cf', tarname, '.' ]
 bzip2 = ['bzip2', '-9', tarname ]

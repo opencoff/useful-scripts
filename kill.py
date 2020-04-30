@@ -6,11 +6,15 @@
 # License: GPLv2
 #
 import sys, os, os.path, signal, re
+from os.path import basename
 
-Z = os.path.basename(sys.argv[0])
+Z           = basename(sys.argv[0])
 Verbose   = False
 Dry_run   = False
 Use_regex = False
+Ignore_case = False
+# Raw character input
+Getch       = None
 
 Usage = """Kill or Terminate a process.
 
@@ -36,62 +40,34 @@ The default signal is SIGTERM.
 Options:
  -n, --dry-run   Do not kill any process, only show what will be done [False]
  -r, --regex     For processes that are named, use regex matching [False]
+ -i, --ignore-case Ignore case when matching names [False]
  -h, --help      Show this help message and quit
 """ % (Z, Z, Z, Z, Z, Z)
 
+def main(argv):
+    global Z, Verbose, Dry_run
 
+    procs, errs = parse_args(argv[1:])
 
-def error(doex, fmt, *args):
-    """Show error message and die if doex > 0"""
-    sfmt = "%s: %s" % (Z, fmt)
-    if args:
-        sfmt = sfmt % args
+    for k, v in procs.items():
+        # k is the signal number, v is a list of process objects
 
-    if not sfmt.endswith('\n'):
-        sfmt += '\n'
+        if Dry_run:
+            x = '\n'.join(['kill -%d %7d %s' % (k, z.pid, z.name) for z in v])
+            print(x)
+            continue
 
-    sys.stdout.flush()
-    sys.stderr.write(sfmt)
-    sys.stderr.flush()
-    if doex > 0:
-        sys.exit(doex)
+        for p in v:
+            x = ' '.join(p.command)
+            s = "kill -%d %7d '%s'? [y/N]? " % (k, p.pid, x)
+            r = prompt(s)
+            if r < 0:
+                sys.stdout.write('\n')
+                sys.exit(0)
 
-
-# Raw character input
-Getch = None
-if sys.platform in ('win32', 'win64', 'cygwin'):
-    import msvcrt
-
-    class _GetchWindows:
-        def __init__(self):
-            pass
-
-        def __call__(self):
-            return msvcrt.getch()
-
-
-    Getch = _GetchWindows()
-
-else:
-    import tty, termios
-
-    class _GetchUnix:
-        def __init__(self):
-            pass
-
-        def __call__(self):
-            fd = sys.stdin.fileno()
-            old_settings = termios.tcgetattr(fd)
-            try:
-                tty.setraw(sys.stdin.fileno())
-                ch = sys.stdin.read(1)
-            finally:
-                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-            return ch
-
-
-    Getch = _GetchUnix()
-
+            if r > 0:
+                os.kill(p.pid, k)
+            sys.stdout.write('\n')
 
 
 class process(object):
@@ -102,18 +78,8 @@ class process(object):
         self.parent = None
         self.children = []
 
-
-    def kill(self, sig=signal.SIGTERM):
-        os.kill(self.pid, sig)
-
-    def killchildren(self, sig=signal.SIGTERM):
-        pass
-
-    def killgroup(self, sig=signal.SIGTERM):
-        pass
-
     def __str__(self):
-        return "%s(%d)" % (self.command, self.pid)
+        return "%d: %s" % (self.pid, self.name)
 
 def ps_output(pscmd, n):
     """Open the ps command 'ps' and yield each line as a tuple.
@@ -123,57 +89,58 @@ def ps_output(pscmd, n):
     l  = fd.readline()  # first line has the titles
     for l in fd:
         l = l.strip()
-        v = l.split()
-        if len(v) > n:
-            x = v[n:]
-            v = v[:n]
-            v.append(' '.join(x))
-
-        #print '|'.join(v)
+        v = l.split(None, n-1)
+        #print "%d: %s" % (len(v), v)
         yield v
 
     fd.close()
 
 
 def _common_darwin_linux_pslist(psfmt):
-    """Common processing block for Darwin & Linux for grokking "ps -auxw" output."""
+    """Common processing block for Darwin & Linux for grokking "ps -axww" output."""
 
-    plist = []
+    plist = {}
     mypid = os.getpid()
     for v in ps_output(psfmt, 10):
-        cmd = v[10]
-        d = {'user': v[0],
-             'uid':     int(v[1]),
-             'pid':     int(v[2]),
-             'gid':     int(v[3]),
-             'pgid':    int(v[4]),
-             'ppid':    int(v[5]),
-             'ruser':   v[6],
-             'ruid':    int(v[7]),
-             'rgid':    int(v[8]),
-             'state':   v[9],
-             'command': cmd,
-             'name':    os.path.basename(cmd),
-            }
+        d = process(user=v[0],
+               uid=int(v[1]),
+               pid=int(v[2]),
+               gid=int(v[3]),
+               pgid=int(v[4]),
+               ppid=int(v[5]),
+               ruser=v[6],
+               ruid=int(v[7]),
+               rgid=int(v[8]),
+               command=[v[9]],   # this is a list!
+              )
 
-        if mypid != d['pid']:
+        d.name = basename(d.command[0])
+
+
+        if mypid != d.pid:
             #print "%s - %d" % (d['name'], d['pid'])
-            plist.append(d)
+            plist[d.pid] = d
 
     return plist
 
 
+# BSD, Linux ps commands are all same.
+Psfmt = "ps axww -o 'user,uid,pid,gid,pgid,ppid,ruser,ruid,rgid,comm'"
+
 def Darwin_pslist():
     """PS List for Darwin returned as an array of dicts"""
 
-    psfmt = "ps -axww -o 'user,uid,pid,gid,pgid,ppid,ruser,ruid,rgid,state,comm'"
-    return _common_darwin_linux_pslist(psfmt)
+    return _common_darwin_linux_pslist(Psfmt)
+
+def OpenBSD6_pslist():
+    """PS List for OpenBSD returned as an array of dicts"""
+
+    return _common_darwin_linux_pslist(Psfmt)
 
 def Linux_pslist():
     """PS List for Darwin returned as an array of dicts"""
 
-    psfmt = "ps axww -o 'user,uid,pid,gid,pgid,ppid,ruser,ruid,rgid,state,args'"
-    return _common_darwin_linux_pslist(psfmt)
+    return _common_darwin_linux_pslist(Psfmt)
 
 
 def cygwin_pslist():
@@ -181,24 +148,24 @@ def cygwin_pslist():
 
     """
     psfmt = "ps -W -l"
-    plist = []
+    plist = {}
     mypid = os.getpid()
     for v in ps_output(psfmt, 7):
         cmd = v[6]
-        d = {'pid':     int(v[0]),
-             'ppid':    int(v[1]),
-             'pgid':    int(v[2]),
-             'winpid':  int(v[3]),
-             'uid':     int(v[5]),
-             'gid':     0,
-             'ruid':    0,
-             'rgid':    0,
-             'state':   0,
-             'command': cmd,
-             'name':    os.path.basename(cmd),
-            }
-        if mypid != d['pid']:
-            plist.append(d)
+        d = bundle(pid=int(v[0]),
+             ppid=int(v[1]),
+             pgid=int(v[2]),
+             winpid=int(v[3]),
+             uid=int(v[5]),
+             gid=0,
+             ruid=0,
+             rgid=0,
+             state=0,
+             command=cmd,
+             name=os.path.basename(cmd)
+            )
+        if mypid != d.pid:
+            plist[d.pid] = d
 
     return plist
 
@@ -214,8 +181,10 @@ class process_list(object):
           'Darwin': Darwin_pslist,
           'darwin': Darwin_pslist,
           'Linux':  Linux_pslist,
+          'linux':    Linux_pslist,
           'linux2':  Linux_pslist,
           'cygwin': cygwin_pslist,
+          'openbsd6': OpenBSD6_pslist,
           'CYGWIN_NT-5.1': cygwin_pslist,
          }
 
@@ -226,25 +195,22 @@ class process_list(object):
         #uname = os.uname()[0]
         uname = sys.platform
         psgrok = self.PS.get(uname, None)
-        assert psgrok is not None, "Can't find ps(1) specification for '%s'" % uname
+        if psgrok is None:
+            error(1, "don't know how to parse ps(1) on %s", uname)
 
-        plist = psgrok()
-
-        for d in plist:
-            d['plist'] = self
-            p = process(**d)
-
-            self.by_pid[p.pid] = p
-            self.by_name.setdefault(p.name, []).append(p)
+        self.by_pid = psgrok()
 
         # Create reverse mappings of parents <-> children
         for p in self.by_pid.values():
+            self.by_name.setdefault(p.name, []).append(p)
             parent = self.by_pid.get(p.ppid, None)
             if not parent:
                 continue
 
             parent.children.append(p)
             p.parent = parent
+            #print str(p)
+
 
 
     def pid(self, p):
@@ -262,11 +228,13 @@ class process_list(object):
         return x
 
     def named(self, name):
-        """Return all processes with the given name in a case insensitive way"""
-        pn = name.lower()
+        """Return all processes with the given name"""
+        global Ignore_case
+
+        pn = name.lower() if Ignore_case else name
         rr = []
         for nm, pv in self.by_name.items():
-            ll = nm.lower()
+            ll = nm.lower() if Ignore_case else nm
             if ll == pn or ll.startswith(pn):
                 rr += pv # Flatten and append
 
@@ -275,23 +243,19 @@ class process_list(object):
 
     def match_rx(self, pat):
         """Return list of processes matching the regex 'pat'"""
+        global Ignore_case
 
         ret = []
-        p2  = re.escape(pat)
-        rx  = re.compile(p2, re.IGNORECASE)
+        rx  = re.compile(pat, re.IGNORECASE if Ignore_case else 0)
         for pid, proc in self.by_pid.items():
             #print proc
-            if rx.search(proc.command):
+            if rx.search(proc.name):
                 ret.append(proc)
 
         return ret
 
-def show_help():
-    print Usage
-
-
-def map_name(a, proclist):
-    """Given a name or pid, map it into a process object or a list
+    def find_all(self, a):
+        """Given a name or pid 'a', map it into a process object or a list
     of process objects.
 
     Note that a given 'name' can map to more than one process
@@ -304,28 +268,32 @@ def map_name(a, proclist):
         pid = int(a)
         if pid < 0:
             pid = -pid
-            procs.append(proclist.pgid(pid))
+                procs.append += self.pgid(pid)
         else:
-            p = proclist.pid(pid)
+                p = self.pid(pid)
             if p:
                 procs.append(p)
             else:
                 error(0, "Can't find pid %s", a)
                 retval += 1
 
-    except  ValueError, e:
+        except  ValueError as e:
         if Use_regex:
-            p = proclist.match_rx(a)
+                p = self.match_rx(a)
         else:
-            p = proclist.named(a)
+                p = self.named(a)
 
         if len(p) == 0:
-            retval += 1
             error(0, "Can't find Process '%s'", a)
+                retval += 1
         else:
             procs += p
 
     return procs, retval
+
+def show_help():
+    print(Usage)
+
 
 
 def parse_args(argv):
@@ -335,18 +303,20 @@ def parse_args(argv):
     It builds a system specific list of signals and their
     corresponding names."""
 
-    global Verbose, Dry_run, Use_regex
+    global Verbose, Dry_run, Use_regex, Ignore_case
 
     # First build a mapping of signal names to signum. Also turn it
     # into easily testable commandline option.
     sigs = {}
     for d in dir(signal):
-        if d.startswith('SIG'):
+        if d.startswith('SIG') and not d.startswith('SIG_'):
             nm  = d[3:]
-            num = eval('signal.%s' % d)
+            num = getattr(signal, d)
+            sigs[d]           = num
             sigs[nm]          = num
             sigs[num]         = num
             sigs['-%s' % nm]  = num
+            sigs['-%s' % d]   = num
             sigs['-%d' % num] = num
 
 
@@ -368,6 +338,10 @@ def parse_args(argv):
             Use_regex = True
             continue
 
+        if a == "-i" or a == "--ignore-case" or a == "--ignore":
+            Ignore_case = True
+            continue
+
         if a.startswith('-'):
             sig = sigs.get(a, None)
             if sig is None:
@@ -375,7 +349,7 @@ def parse_args(argv):
                 # happens to be the same _value_ as a signal!
                 error(1, "Unknown option '%s'", a)
         else:
-            killable, retval = map_name(a, proclist)
+            killable, retval = proclist.find_all(a)
             if retval == 0:
                 x = procs.setdefault(sig, [])
                 x += killable
@@ -398,29 +372,59 @@ def prompt(s):
         r = 1
     elif v == 'q' or v == 'Q':
         r = -1
-    sys.stdout.write('\n')
     return r
 
 
-def main(argv):
-    global Z, Verbose, Dry_run
+def error(doex, fmt, *args):
+    """Show error message and die if doex > 0"""
+    sfmt = "%s: %s" % (Z, fmt)
+    if args:
+        sfmt = sfmt % args
 
-    procs, errs = parse_args(argv[1:])
+    if not sfmt.endswith('\n'):
+        sfmt += '\n'
 
-    for k, v in procs.items():
-        # k is the signal number, v is a list of process objects
+    sys.stdout.flush()
+    sys.stderr.write(sfmt)
+    sys.stderr.flush()
+    if doex > 0:
+        sys.exit(doex)
 
-        if not Dry_run:
-            for p in v:
-                s = "kill -%d %7d '%s'? [y/N]? " % (k, p.pid, p.command)
-                r = prompt(s)
-                if r > 0:
-                    os.kill(p.pid, k)
-                elif r < 0:
-                    sys.exit(0)
+
+
+# global setup before main()
+if sys.platform in ('win32', 'win64', 'cygwin'):
+    import msvcrt
+
+    class _GetchWindows:
+        def __init__(self):
+            pass
+
+        def __call__(self):
+            return msvcrt.getch()
+
+
+    Getch = _GetchWindows()
+
         else:
-            x = '\n'.join(['kill -%d %7d %s' % (k, z.pid, z.command) for z in v])
-            print x
+    import tty, termios
+
+    class _GetchUnix:
+        def __init__(self):
+            pass
+
+        def __call__(self):
+            fd = sys.stdin.fileno()
+            old_settings = termios.tcgetattr(fd)
+            try:
+                tty.setraw(sys.stdin.fileno())
+                ch = sys.stdin.read(1)
+            finally:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+            return ch
+
+
+    Getch = _GetchUnix()
 
 
 main(sys.argv)

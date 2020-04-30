@@ -40,7 +40,7 @@ def transcode(fn, verbose=False):
 
     if mod:
         if verbose:
-            print "%s" % fn
+            print("%s" % fn)
 
         bak = fn + '.orig'
         os.rename(fn, bak)
@@ -77,4 +77,4 @@ for f in sys.argv[1:]:
     elif os.path.isdir(f):
         fixup(f, True)
     else:
-        print "Hmm. %s is not a file or dir" % f
+        print("Hmm. %s is not a file or dir" % f)

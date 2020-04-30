@@ -3,4 +3,4 @@
 import os.path, sys
 
 for a in sys.argv[1:]:
-    print os.path.abspath(a)
+    print(os.path.abspath(a))

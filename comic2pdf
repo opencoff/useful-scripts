@@ -130,7 +130,7 @@ def img2pdf(pdf, imgs):
 
         c.save()
 
-    except Exception, ex:
+    except Exception as ex:
         warn("Exception while converting %s: %s", fn, ex)
 
 def process(fn):
@@ -149,7 +149,7 @@ def process(fn):
     bn, ex = splitext(fn)
     pdf    = bn + '.pdf'
 
-    print "%s --> %s" % (basename(fn), basename(pdf))
+    print("%s --> %s" % (basename(fn), basename(pdf)))
     img2pdf(pdf, imgs)
 
     rmtree(dn)
@@ -170,7 +170,7 @@ def main():
             dn   = basename(fn)
             pdf  = dn + '.pdf'
 
-            print "%s --> %s" % (dn, basename(pdf))
+            print("%s --> %s" % (dn, basename(pdf)))
             img2pdf(pdf, imgs)
 
 

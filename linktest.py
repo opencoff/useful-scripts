@@ -35,24 +35,16 @@ def verbose(fmt, *args):
     if not Verbose:
         return
 
-    if args:
-        str = fmt % args
-    else:
-        str = fmt
-
-    print >>sys.stderr, str
+    s = (fmt % args) if args else fmt
+    print(s, file=sys.stderr)
     sys.stderr.flush()
     
 
 def error(doex, fmt, *args):
     """Show error message and die if doex > 0"""
     sfmt = "%s: %s" % (Z, fmt)
-    if args:
-        str = sfmt % args
-    else:
-        str = sfmt
-
-    print >>sys.stderr, str
+    s = (fmt % args) if args else fmt
+    print(s, file=sys.stderr)
     if doex > 0:
         sys.exit(doex)
 
@@ -252,8 +244,8 @@ def link_test(cmdobj, iface):
     if fields['link'] != 'yes':
         result = "NOPE"
 
-    print "%s %s link=%s speed=%s duplex=%s" % (result, iface, fields['link'],
-            fields['speed'], fields['duplex'])
+    print("%s %s link=%s speed=%s duplex=%s" % (result, iface, fields['link'],
+            fields['speed'], fields['duplex']))
 
 
 # -- main() --
@@ -276,7 +268,7 @@ Verbose = opt.verbose
 cmdobj  = local_command()
 for a in args:
     if not os.path.isdir('/sys/class/net/%s' % a):
-        print "ERR %s No such interface" % a
+        print("ERR %s No such interface" % a)
         continue
 
     link_test(cmdobj, a)

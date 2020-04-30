@@ -17,7 +17,7 @@ from optparse import Option, OptionParser, OptionValueError
 def randnum(n=4):
     """Return a 'n' decimal digit random number"""
 
-    l = 10L ** (n - 1)
+    l = 10 ** (n - 1)
     #print "n=%d, %ld <= x < %ld" % (n, l, l *10)
     v = random.randint(l, (l * 10) - 1)
     return "%ld" % v
@@ -183,6 +183,6 @@ else:
 
 rr = ( gen() for a in range(n) )
 ps = '\0' if opt.print0 else '\n'
-print ps.join(rr)
+print(ps.join(rr))
 
 # EOF

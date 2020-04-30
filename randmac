@@ -78,8 +78,8 @@ pref = "%s:%s:%s" % (p[0:2], p[2:4], p[4:])
 mac  = "%s:%s" % (pref.lower(), randhex())
 
 if opt.verbose:
-    print "%s  - %s" % (mac, t[1])
+    print("%s  - %s" % (mac, t[1]))
 else:
-    print mac
+    print(mac)
 
 # EOF

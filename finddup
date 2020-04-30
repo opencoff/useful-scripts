@@ -21,11 +21,11 @@ except:
     import md5
     md5sum = md5.md5
 
-KB = 1024L
-MB = 1024L * KB
-GB = 1024L * MB
-TB = 1024L * GB
-PB = 1024L * TB
+KB = 1024
+MB = 1024 * KB
+GB = 1024 * MB
+TB = 1024 * GB
+PB = 1024 * TB
 
 Divisors = [
     ('PB', PB),
@@ -109,19 +109,19 @@ class cksum_db:
 
 def mmap_gen(fn):
     """Generator that yields mmap'd chunks of memory and length"""
-    MM_CHUNKSIZE = 2L * GB
+    MM_CHUNKSIZE = 2 * GB
 
     fd  = open(fn, 'rb')
     fdn = fd.fileno()
     st  = os.fstat(fdn)
-    n   = 0L + st.st_size
-    off = 0L
+    n   = 0 + st.st_size
+    off = 0
     while n > 0:
         z  = MM_CHUNKSIZE if n > MM_CHUNKSIZE else n
         try:
             mm = mmap.mmap(fdn, z, access=mmap.ACCESS_READ, offset=off)
             yield mm, z
-        except Exception, ex:
+        except Exception as ex:
             ss = "can't mmap %d bytes of %s: %s" % (z, fn, str(ex))
             raise Exception(ss)
         mm.close()
@@ -134,7 +134,7 @@ def mmap_gen(fn):
 
 def cksum_slow(filename):
     m  = md5sum()
-    sz = 0L
+    sz = 0
 
     for mm, n in mmap_gen(filename):
         buf = mm.read(n)
@@ -145,8 +145,8 @@ def cksum_slow(filename):
     return b
 
 def cksum_quick(filename):
-    v  = 0L
-    sz = 0L
+    v  = 0
+    sz = 0
     for mm, n in mmap_gen(filename):
         buf = mm.read(n)
         v   = zlib.adler32(buf, v)
@@ -184,35 +184,35 @@ class shell:
     """Abstraction to print shell commands to remove dups"""
 
     def __init__(self):
-        self.tot = 0L
-        print "#! /bin/sh\n"
+        self.tot = 0
+        print("#! /bin/sh\n")
 
     def dups(self, k, keep, rm):
         waste     = keep.size * len(rm)
         self.tot += waste
         s = '\n'.join([ "rm -f '%s'" % x.fname for x in rm ])
-        print "# %s: %s, saving %s\n#rm -f '%s'\n%s\n" % \
-                (k, human(keep.size), human(waste), keep.fname, s)
+        print("# %s: %s, saving %s\n#rm -f '%s'\n%s\n" % \
+                (k, human(keep.size), human(waste), keep.fname, s))
 
     def finish(self):
-        print "# %s saved" % human(self.tot)
+        print("# %s saved" % human(self.tot))
 
 
 class plain:
     """Abstraction to simply print the duplicated files"""
     def __init__(self):
-        self.tot = 0L
-        print "Report of duplicate files\n"
+        self.tot = 0
+        print("Report of duplicate files\n")
 
     def dups(self, k, keep, rm):
         waste     = keep.size * len(rm)
         self.tot += waste
         s = '\n\t'.join( [x.fname for x in rm ])
-        print "%s: %s, wasted %s\n\tKEEP %s\n%s" % \
-                (k, human(keep.size), human(waste), keep.fname, s)
+        print("%s: %s, wasted %s\n\tKEEP %s\n%s" % \
+                (k, human(keep.size), human(waste), keep.fname, s))
 
     def finish(self):
-        print "\n%s total wasted space" % human(self.tot)
+        print("\n%s total wasted space" % human(self.tot))
 
 
 
@@ -234,7 +234,7 @@ db = cksum_db(cksum_quick)
 zargs = []
 for d in args:
     if not isdir(d):
-        print >>sys.stderr, "Skipping non-directory %s" % d
+        print("Skipping non-directory %s" % d, file=sys.stderr)
         continue
 
     descend(db, d)

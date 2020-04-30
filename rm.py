@@ -91,14 +91,14 @@ def prompt(s):
         r = 1
     elif v == 'q' or v == 'Q':
         r = -1
-    sys.stdout.write('\n')
+    #sys.stdout.write('\n')
     return r
 
 
 def main(argv):
 
     if len(argv) == 1 or argv[1] == '-h':
-        print "Usage: %s FILE [FILE..]" % argv[0]
+        print("Usage: %s FILE [FILE..]" % argv[0]) 
         sys.exit(1)
 
     for f in argv[1:]:
@@ -108,10 +108,16 @@ def main(argv):
         s = "%-50s [y/N]? " % f
         r = prompt(s)
         if r < 0:
+            sys.stdout.write('\n')
             sys.exit(0)
 
         elif r > 0:
+            try:
             os.unlink(f)
+            except Exception as ex:
+                s = str(ex)
+                sys.stdout.write(" %s\n" % s)
+        sys.stdout.write('\n')
 
 main(sys.argv)
 

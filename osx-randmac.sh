@@ -182,7 +182,7 @@ function _randmac {
 
     # These are VMware, Xen and Parallels OUIs
     typeset -a vendors=("00:05:69" "00:0c:29" "00:1c:14" "00:50:56" \
-                        "00:1c:42" "00:16:3e")
+                        "00:1c:42" "00:16:3e" "00:bb:3a" "e0:cb:1d")
     typeset -a rand=($randstr)
 
     # Number of vendors (length of array)
@@ -203,7 +203,7 @@ function _randmac {
 
 function update_mac {
     typeset iface=$1
-    typeset mac=$(_randmac)
+    typeset mac=$2
 
     # Updating MAC requires us to turn on the WiFi iface
 
@@ -310,11 +310,16 @@ else
     test $? -eq 0 || exit 1
 fi
 
+mac=$2
+if [ -z "$mac" ]; then
+    mac=$(_randmac)
+fi
+
 
 r=0
 case $action in
     start|update)
-        update_mac $iface
+        update_mac $iface $mac
         r=$?
         ;;
 
